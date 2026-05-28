@@ -1,0 +1,70 @@
+# ── Private / internal docs (not for public repo) ────────────────────────────
+learning/
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+depoprep/node_modules/
+
+# ── Environment & Secrets (NEVER commit) ─────────────────────────────────────
+.env
+.env.local
+.env*.local
+depoprep/.env
+depoprep/.env.local
+depoprep/.env*.local
+
+# ── Next.js build output ──────────────────────────────────────────────────────
+depoprep/.next/
+depoprep/out/
+depoprep/build/
+
+# ── Convex ────────────────────────────────────────────────────────────────────
+# Local anonymous dev database — machine-specific, not shareable
+depoprep/.convex/
+# Auto-generated on `npx convex dev` — do not commit
+depoprep/convex/_generated/
+
+# ── TypeScript build cache ────────────────────────────────────────────────────
+*.tsbuildinfo
+depoprep/next-env.d.ts
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── AI assistant (Claude Code) ────────────────────────────────────────────────
+CLAUDE.md
+AGENTS.md
+depoprep/CLAUDE.md
+depoprep/AGENTS.md
+.claude/
+depoprep/.claude/
+
+# ── Vercel ────────────────────────────────────────────────────────────────────
+.vercel
+depoprep/.vercel
+
+# ── Certificates / keys ───────────────────────────────────────────────────────
+*.pem
+*.key
+*.cert
