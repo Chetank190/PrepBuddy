@@ -27,9 +27,16 @@ export type CoachingReference = {
   why: string;
 };
 
+const EVENT_LABELS = {
+  deposition: "deposition",
+  trial_testimony: "trial cross-examination",
+  settlement_conference: "settlement conference",
+} as const;
+
 export function buildEvaluatorPrompt(
   transcript: Array<{ role: string; content: string }>,
   references: CoachingReference[] = [],
+  eventType: keyof typeof EVENT_LABELS = "deposition",
 ): string {
   const formatted = transcript
     .map((t) => `[${t.role.toUpperCase()}]: ${t.content}`)
@@ -46,7 +53,7 @@ ${references
   .join("\n")}
 `;
 
-  return `You are a legal witness preparation coach. Analyze this deposition practice transcript and return a JSON object.
+  return `You are a legal witness preparation coach. Analyze this ${EVENT_LABELS[eventType]} practice transcript and return a JSON object.
 
 TRANSCRIPT:
 ${formatted}
@@ -100,7 +107,12 @@ const FEEDBACK_SCHEMA = {
 // Free-tier models also return 503/429 under load, so retry once before handing off to the next provider.
 const RETRYABLE_STATUSES = [429, 500, 503];
 // A provider slower than this is treated as failed, so the next one in the chain takes over.
-const PROVIDER_TIMEOUT_MS = 20_000;
+// Live grading hands off quickly; the eval (a pinned provider) can afford to wait.
+const LIVE_TIMEOUT_MS = 10_000;
+const EVAL_TIMEOUT_MS = 30_000;
+// Pinned, not "gemini-flash-lite-latest": the alias moved to an overloaded model mid-testing
+// (503s, 20–30 s replies) while 3.1 Flash-Lite answered in 1–3 s with equal or better eval scores.
+const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 
 class ProviderHttpError extends Error {
   constructor(message: string, public status: number, public retryAfterMs?: number) {
@@ -127,12 +139,12 @@ async function httpError(res: Response, label: string): Promise<ProviderHttpErro
 
 type ModelReply = { text: string; model: string };
 
-async function callGemini(apiKey: string, prompt: string): Promise<ModelReply> {
-  const model = process.env.GEMINI_MODEL ?? "gemini-flash-lite-latest";
+async function callGemini(apiKey: string, prompt: string, timeoutMs: number): Promise<ModelReply> {
+  const model = process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return { text: await callGeminiModel(apiKey, model, prompt), model };
+      return { text: await callGeminiModel(apiKey, model, prompt, timeoutMs), model };
     } catch (err) {
       lastError = err;
       if (!(err instanceof ProviderHttpError) || !RETRYABLE_STATUSES.includes(err.status)) throw err;
@@ -143,13 +155,18 @@ async function callGemini(apiKey: string, prompt: string): Promise<ModelReply> {
   throw lastError;
 }
 
-async function callGeminiModel(apiKey: string, model: string, prompt: string): Promise<string> {
+async function callGeminiModel(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<string> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
@@ -167,12 +184,12 @@ async function callGeminiModel(apiKey: string, model: string, prompt: string): P
 }
 
 // Groq speaks the OpenAI chat-completions format. JSON mode guarantees valid JSON; parseFeedback checks the shape.
-async function callGroq(apiKey: string, prompt: string): Promise<ModelReply> {
+async function callGroq(apiKey: string, prompt: string, timeoutMs: number): Promise<ModelReply> {
   const model = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       model,
       temperature: 0.3,
@@ -187,8 +204,8 @@ async function callGroq(apiKey: string, prompt: string): Promise<ModelReply> {
 
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 
-async function callClaude(apiKey: string, prompt: string): Promise<ModelReply> {
-  const anthropic = new Anthropic({ apiKey, timeout: PROVIDER_TIMEOUT_MS });
+async function callClaude(apiKey: string, prompt: string, timeoutMs: number): Promise<ModelReply> {
+  const anthropic = new Anthropic({ apiKey, timeout: timeoutMs });
   const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 1024,
@@ -243,7 +260,7 @@ const PROVIDERS: Array<{
   name: ProviderName;
   label: string;
   key: () => string | undefined;
-  call: (key: string, prompt: string) => Promise<ModelReply>;
+  call: (key: string, prompt: string, timeoutMs: number) => Promise<ModelReply>;
 }> = [
   { name: "gemini", label: "Gemini", key: () => process.env.GEMINI_API_KEY, call: callGemini },
   { name: "groq", label: "Groq", key: () => process.env.GROQ_API_KEY, call: callGroq },
@@ -270,6 +287,7 @@ export async function gradeWithChain(
   const promptFor = typeof prompt === "string" ? () => prompt : prompt;
   // Live grading fails over fast; a pinned provider (the eval) waits out rate limits instead.
   const maxRateLimitWaits = only ? 3 : 0;
+  const timeoutMs = only ? EVAL_TIMEOUT_MS : LIVE_TIMEOUT_MS;
   const enabled = PROVIDERS.filter((p) => (only ? p.name === only : true) && p.key());
   if (enabled.length === 0) {
     throw new Error(
@@ -285,7 +303,7 @@ export async function gradeWithChain(
       let reply: ModelReply | undefined;
       for (let wait = 0; !reply; wait++) {
         try {
-          reply = await provider.call(provider.key()!, promptFor(provider.name));
+          reply = await provider.call(provider.key()!, promptFor(provider.name), timeoutMs);
         } catch (err) {
           const waitMs = err instanceof ProviderHttpError && err.status === 429 ? (err.retryAfterMs ?? 10_000) : 0;
           if (!waitMs || wait >= maxRateLimitWaits || waitMs > 30_000) throw err;
@@ -327,7 +345,7 @@ export async function embedTexts(
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      signal: AbortSignal.timeout(LIVE_TIMEOUT_MS),
       body: JSON.stringify({
         requests: texts.map((text) => ({
           model: `models/${EMBEDDING_MODEL}`,

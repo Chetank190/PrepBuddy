@@ -15,8 +15,8 @@ Witness answers (text / Web Speech API)          ──►  Convex DB (reactive)
 "End & Get Feedback" ──► Convex action: generateFeedback ───┘
                            1. embed answers (gemini-embedding-001, 768d)
                            2. vector search coaching_examples (Convex vector index)
-                           3. grade: Gemini Flash-Lite → Groq gpt-oss-120b → Claude Sonnet
-                              (schema-enforced JSON, strict validation, 20 s timeout each)
+                           3. grade: Gemini 3.1 Flash-Lite → Groq gpt-oss-120b → Claude Sonnet
+                              (schema-enforced JSON, strict validation, 10 s live timeout each)
                            4. save score, rubric, verbatim risk quotes, model, latency
 ```
 
@@ -40,7 +40,7 @@ One run each, Oct 19 2026, free tiers. *Includes waits for Groq's free-tier limi
 **Quotes grounded** checks every quoted "risky answer" really appears in the transcript — a hallucination check that needs no labels.
 Labels were written for this project, not by practising lawyers; treat the numbers as directional.
 
-**What we learned:** retrieval helped the weaker model (Groq) but not the stronger one, so references go into the prompt only for fallbacks. And the "bigger" Gemini Flash took **106–122 s** per grade on the free tier versus **~2.8 s** for Flash-Lite, with no accuracy gain on the planted mistakes.
+**What we learned:** retrieval helped the weaker model (Groq) but not the stronger one, so references go into the prompt only for fallbacks. The "bigger" Gemini Flash took **106–122 s** per grade on the free tier versus **~2.8 s** for Flash-Lite, with no accuracy gain on the planted mistakes. And the `gemini-flash-lite-latest` alias later moved to an overloaded model (503s, 20–30 s replies), so the default is now pinned to `gemini-3.1-flash-lite`, which scored 100% weak caught on the eval at 2.4 s median.
 
 ## Stack
 

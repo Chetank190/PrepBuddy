@@ -20,6 +20,7 @@ export const generateFeedback = action({
       id: args.sessionId,
     });
     if (!session) throw new Error("Session not found");
+    const matter = await ctx.runQuery(api.matters.getById, { id: session.matterId });
 
     await ctx.runMutation(internal.simSessions.setGradingError, { sessionId: args.sessionId });
 
@@ -39,7 +40,11 @@ export const generateFeedback = action({
     let result: GradeResult;
     try {
       result = await gradeWithChain((provider) =>
-        buildEvaluatorPrompt(session.transcript, promptGetsReferences(mode, provider) ? references : []),
+        buildEvaluatorPrompt(
+          session.transcript,
+          promptGetsReferences(mode, provider) ? references : [],
+          matter?.eventType,
+        ),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

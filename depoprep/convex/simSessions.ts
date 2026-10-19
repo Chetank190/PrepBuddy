@@ -129,6 +129,7 @@ export const postNextQuestion = mutation({
     const content = formatQuestionMessage(questions[index], {
       isFirst: index === 0,
       persona: matter.persona,
+      eventType: matter.eventType,
     });
 
     await ctx.db.patch(args.sessionId, {

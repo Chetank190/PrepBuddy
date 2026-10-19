@@ -1,11 +1,17 @@
 export type Persona = "calm_precise" | "aggressive" | "friendly_manipulative";
 
-/** Fixed opening for every simulation session (persona affects counsel style in feedback, not this intro). */
-export const SESSION_OPENING =
-  "I represent the plaintiff in the matter. I will be asking you questions related to an accident.";
+export type EventType = "deposition" | "trial_testimony" | "settlement_conference";
 
-export function getSessionOpening(): string {
-  return SESSION_OPENING;
+/** Fixed opening for each simulation session, worded for the matter's event type. */
+const SESSION_OPENINGS: Record<EventType, string> = {
+  deposition: "I represent the opposing party in this matter. I will be asking you some questions today.",
+  trial_testimony: "I am counsel for the opposing party. I will now begin my cross-examination.",
+  settlement_conference:
+    "I represent the other side. Before we discuss terms, I have a few questions about your position.",
+};
+
+export function getSessionOpening(eventType: EventType = "deposition"): string {
+  return SESSION_OPENINGS[eventType];
 }
 
 export function getSessionClosingMessage(): string {
@@ -14,10 +20,10 @@ export function getSessionClosingMessage(): string {
 
 export function formatQuestionMessage(
   question: string,
-  opts: { isFirst: boolean; persona?: Persona }
+  opts: { isFirst: boolean; persona?: Persona; eventType?: EventType }
 ): string {
   if (opts.isFirst) {
-    return `${getSessionOpening()}\n\n${question}`;
+    return `${getSessionOpening(opts.eventType)}\n\n${question}`;
   }
   return question;
 }
