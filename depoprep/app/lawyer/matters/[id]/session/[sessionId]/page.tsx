@@ -7,6 +7,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SessionFeedbackPanel } from "@/components/simulation/SessionFeedbackPanel";
+import { highlightRisks } from "@/components/simulation/highlightRisks";
 import Link from "next/link";
 import { ArrowLeft, Bot, User, AlertTriangle } from "lucide-react";
 
@@ -49,16 +50,6 @@ export default function SessionTranscriptPage({
               ` · ${Math.round((new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime()) / 60000)} min`}
           </p>
         </div>
-        {feedback && (
-          <div className="ml-auto text-center">
-            <div
-              className={`text-4xl font-bold ${feedback.readinessScore >= 80 ? "text-green-600" : feedback.readinessScore >= 60 ? "text-amber-600" : "text-red-600"}`}
-            >
-              {feedback.readinessScore}
-            </div>
-            <div className="text-xs text-muted-foreground">Readiness Score</div>
-          </div>
-        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -89,13 +80,15 @@ export default function SessionTranscriptPage({
                       </div>
                       <div className={`max-w-[80%] ${msg.role === "client" ? "items-end" : ""} flex flex-col gap-1`}>
                         <div
-                          className={`rounded-2xl px-4 py-3 text-sm ${
+                          className={`rounded-2xl px-4 py-3 text-base leading-relaxed ${
                             msg.role === "ai"
                               ? "bg-muted text-foreground"
                               : "bg-primary text-primary-foreground"
                           }`}
                         >
-                          {msg.content}
+                          {msg.role === "client" && feedback
+                            ? highlightRisks(msg.content, feedback.riskHighlights)
+                            : msg.content}
                         </div>
                         {msg.flags && msg.flags.length > 0 && (
                           <div className="flex gap-1 flex-wrap">
@@ -122,7 +115,23 @@ export default function SessionTranscriptPage({
         {/* Feedback */}
         <div className="space-y-4">
           {feedback ? (
-            <SessionFeedbackPanel feedback={feedback} />
+            <>
+              <SessionFeedbackPanel feedback={feedback} audience="lawyer" />
+              {feedback.rawJson && (
+                <details className="rounded-xl border bg-card p-4">
+                  <summary className="cursor-pointer text-sm font-medium">Raw grader output (JSON)</summary>
+                  <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-xs font-mono text-muted-foreground">
+                    {(() => {
+                      try {
+                        return JSON.stringify(JSON.parse(feedback.rawJson), null, 2);
+                      } catch {
+                        return feedback.rawJson;
+                      }
+                    })()}
+                  </pre>
+                </details>
+              )}
+            </>
           ) : (
             <Card>
               <CardContent className="p-6 text-center text-muted-foreground text-sm">

@@ -1,42 +1,17 @@
 "use node";
 
 import { action } from "../_generated/server";
-import { v } from "convex/values";
-import { api } from "../_generated/api";
-import Anthropic from "@anthropic-ai/sdk";
-
-function buildEvaluatorPrompt(
-  transcript: Array<{ role: string; content: string }>
-): string {
-  const formatted = transcript
-    .map((t) => `[${t.role.toUpperCase()}]: ${t.content}`)
-    .join("\n");
-
-  return `You are a legal witness preparation coach. Analyze this deposition practice transcript and return a JSON object.
-
-TRANSCRIPT:
-${formatted}
-
-Return ONLY valid JSON (no markdown fences, no explanation text before or after):
-{
-  "readinessScore": <0-100 overall score>,
-  "rubric": {
-    "volunteering": { "score": <0-100>, "explanation": "<1-2 sentences>" },
-    "speculation":  { "score": <0-100>, "explanation": "<1-2 sentences>" },
-    "consistency":  { "score": <0-100>, "explanation": "<1-2 sentences>" },
-    "brevity":      { "score": <0-100>, "explanation": "<1-2 sentences>" },
-    "composure":    { "score": <0-100>, "explanation": "<1-2 sentences>" }
-  },
-  "tips": ["<concrete tip 1>", "<concrete tip 2>", "<concrete tip 3>"],
-  "riskHighlights": ["<risky answer excerpt 1>", "<risky answer excerpt 2>"]
-}
-
-Scoring guide:
-- 80-100: Excellent — minimal issues
-- 60-79: Good — some patterns to watch
-- 40-59: Needs work — clear recurring problems
-- 0-39: Significant preparation needed`;
-}
+import { ConvexError, v } from "convex/values";
+import { api, internal } from "../_generated/api";
+import {
+  buildEvaluatorPrompt,
+  gradeWithChain,
+  promptGetsReferences,
+  ragMode,
+  retrieveCoaching,
+  type CoachingReference,
+  type GradeResult,
+} from "./grader";
 
 export const generateFeedback = action({
   args: { sessionId: v.id("sim_sessions") },
@@ -46,45 +21,46 @@ export const generateFeedback = action({
     });
     if (!session) throw new Error("Session not found");
 
-    const prompt = buildEvaluatorPrompt(session.transcript);
+    await ctx.runMutation(internal.simSessions.setGradingError, { sessionId: args.sessionId });
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "ANTHROPIC_API_KEY is not set in Convex. Run: npx convex env set ANTHROPIC_API_KEY <your-key>",
-      );
+    // Retrieval is best-effort: if embeddings or the library are unavailable, grade without references.
+    // The references are shown to the witness; ragMode decides which graders also see them.
+    const mode = ragMode();
+    let references: CoachingReference[] = [];
+    if (mode !== "off") {
+      try {
+        const answers = session.transcript.filter((t) => t.role === "client").map((t) => t.content);
+        references = await retrieveCoaching(ctx, answers);
+      } catch (err) {
+        console.warn(`Coaching retrieval skipped: ${err instanceof Error ? err.message : err}`);
+      }
     }
-    const anthropic = new Anthropic({ apiKey });
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1024,
-      temperature: 0.3,
-      messages: [{ role: "user", content: prompt }],
-    });
 
-    const raw =
-      response.content[0].type === "text" ? response.content[0].text : "{}";
+    let result: GradeResult;
+    try {
+      result = await gradeWithChain((provider) =>
+        buildEvaluatorPrompt(session.transcript, promptGetsReferences(mode, provider) ? references : []),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await ctx.runMutation(internal.simSessions.setGradingError, {
+        sessionId: args.sessionId,
+        error: message,
+      });
+      // ConvexError keeps the message visible to the client instead of a generic "Server Error".
+      throw new ConvexError(message);
+    }
 
-    // Strip any accidental markdown fences Claude might add
-    const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/, "").trim();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const feedback: any = JSON.parse(cleaned);
-
-    const feedbackId = await ctx.runMutation(api.simFeedback.save, {
+    const feedbackId = await ctx.runMutation(internal.simFeedback.save, {
       sessionId: args.sessionId,
       clientId: session.clientId,
       matterId: session.matterId,
-      readinessScore: feedback.readinessScore ?? 50,
-      rubric: {
-        volunteering: feedback.rubric?.volunteering ?? { score: 50, explanation: "" },
-        speculation: feedback.rubric?.speculation ?? { score: 50, explanation: "" },
-        consistency: feedback.rubric?.consistency ?? { score: 50, explanation: "" },
-        brevity: feedback.rubric?.brevity ?? { score: 50, explanation: "" },
-        composure: feedback.rubric?.composure ?? { score: 50, explanation: "" },
-      },
-      tips: feedback.tips ?? [],
-      riskHighlights: feedback.riskHighlights ?? [],
+      ...result.feedback,
+      gradedBy: result.model,
+      gradingMs: result.ms,
+      fallbacks: result.fallbacks,
+      references,
+      rawJson: result.rawText,
     });
 
     await ctx.runMutation(api.simSessions.complete, {

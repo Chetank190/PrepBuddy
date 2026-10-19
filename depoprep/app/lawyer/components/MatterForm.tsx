@@ -214,7 +214,7 @@ export function MatterForm({
             </div>
 
             <div className="space-y-2">
-              <Label>AI Opponent Persona</Label>
+              <Label>Counsel Style</Label>
               <p className="text-xs text-muted-foreground">Choose a style that matches the opposing counsel your client will face.</p>
               <div className="grid gap-3">
                 {PERSONAS.map(({ value, label, desc }) => (

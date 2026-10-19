@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { ArrowLeft, Users, Plus, X, FileText, CheckCircle, Clock, Pencil } from "lucide-react";
 import { PERSONAS } from "@/app/lawyer/components/MatterForm";
+import { scoreColor } from "@/components/simulation/SessionFeedbackPanel";
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,8 @@ export default function MatterDetailPage({ params }: { params: Promise<{ id: str
   const clients = useQuery(api.matters.getClientsForMatter, { matterId });
   const allClients = useQuery(api.users.getAllClients, {});
   const sessions = useQuery(api.simSessions.listByMatter, { matterId });
+  const feedbackList = useQuery(api.simFeedback.listByMatter, { matterId });
+  const scoreBySession = new Map(feedbackList?.map((f) => [f.sessionId, f.readinessScore]));
   const addClient = useMutation(api.matters.addClient);
   const removeClient = useMutation(api.matters.removeClient);
 
@@ -107,7 +110,7 @@ export default function MatterDetailPage({ params }: { params: Promise<{ id: str
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div className="p-4 bg-muted/50 rounded-lg">
-            <h3 className="text-sm font-semibold mb-1">AI Opponent Persona</h3>
+            <h3 className="text-sm font-semibold mb-1">Counsel Style</h3>
             <p className="text-sm text-muted-foreground">{personaLabel}</p>
           </div>
           <div className="p-4 bg-muted/50 rounded-lg">
@@ -227,7 +230,7 @@ export default function MatterDetailPage({ params }: { params: Promise<{ id: str
           </Card>
         ) : (
           <div className="grid gap-3">
-            {sessions.map((session) => (
+            {[...sessions].reverse().map((session) => (
               <Card key={session._id}>
                 <CardContent className="p-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -244,9 +247,19 @@ export default function MatterDetailPage({ params }: { params: Promise<{ id: str
                     </div>
                   </div>
                   {session.status === "completed" && (
-                    <Link href={`/lawyer/matters/${matterId}/session/${session._id}`}>
-                      <Button variant="outline" size="sm">View Transcript</Button>
-                    </Link>
+                    <div className="flex items-center gap-4">
+                      {scoreBySession.has(session._id) && (
+                        <div className="text-right">
+                          <p className={`text-2xl font-bold leading-none ${scoreColor(scoreBySession.get(session._id)!)}`}>
+                            {scoreBySession.get(session._id)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">Readiness</p>
+                        </div>
+                      )}
+                      <Link href={`/lawyer/matters/${matterId}/session/${session._id}`}>
+                        <Button variant="outline" size="sm">View Transcript</Button>
+                      </Link>
+                    </div>
                   )}
                 </CardContent>
               </Card>

@@ -1,7 +1,8 @@
 "use client";
 
-import { use } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { use, useState } from "react";
+import { useQuery, useMutation, useAction } from "convex/react";
+import { ConvexError } from "convex/values";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/lib/auth-context";
@@ -9,7 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Play, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2, Play, RotateCcw } from "lucide-react";
 import {
   READINESS_REPEAT_THRESHOLD,
   SessionFeedbackPanel,
@@ -33,6 +34,19 @@ export default function SimulationResultsPage({
     sessionId: sessionId as Id<"sim_sessions">,
   });
   const createSession = useMutation(api.simSessions.create);
+  const generateFeedback = useAction(api.ai.feedbackEvaluator.generateFeedback);
+  const [isRegrading, setIsRegrading] = useState(false);
+
+  const handleRetryGrading = async () => {
+    setIsRegrading(true);
+    try {
+      await generateFeedback({ sessionId: sessionId as Id<"sim_sessions"> });
+    } catch (err) {
+      toast.error(err instanceof ConvexError ? String(err.data) : "Grading failed again");
+    } finally {
+      setIsRegrading(false);
+    }
+  };
 
   const handleRepeat = async () => {
     if (!user || !matter) return;
@@ -63,7 +77,7 @@ export default function SimulationResultsPage({
   const needsRepeat = feedback && feedback.readinessScore < READINESS_REPEAT_THRESHOLD;
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
+    <div className="p-8 max-w-4xl mx-auto">
       <Link
         href="/client/simulation"
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-6"
@@ -84,11 +98,31 @@ export default function SimulationResultsPage({
         </p>
       </div>
 
-      {!feedback ? (
+      {!feedback && session.gradingError && !isRegrading ? (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="p-10 text-center space-y-4">
+            <AlertTriangle className="w-8 h-8 mx-auto text-red-600" />
+            <p className="text-lg font-semibold text-red-800">Grading failed</p>
+            <p className="text-sm text-red-700">{session.gradingError}</p>
+            <Button onClick={() => void handleRetryGrading()}>
+              <RotateCcw className="w-4 h-4 mr-2" />
+              Retry grading
+            </Button>
+          </CardContent>
+        </Card>
+      ) : !feedback ? (
         <Card>
           <CardContent className="p-10 text-center">
             <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
-            <p className="text-muted-foreground">Generating your feedback…</p>
+            <p className="text-lg text-muted-foreground">Grading your answers…</p>
+            {!isRegrading && (
+              <button
+                className="mt-4 text-sm text-muted-foreground underline"
+                onClick={() => void handleRetryGrading()}
+              >
+                Taking too long? Retry grading
+              </button>
+            )}
           </CardContent>
         </Card>
       ) : (

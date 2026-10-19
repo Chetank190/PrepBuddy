@@ -1,11 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { CheckCircle, Database, Loader2 } from "lucide-react";
+import { hashPassword } from "@/lib/hash";
+
+const DEMO_PASSWORD = "demo1234";
 
 type SeedStatus = "idle" | "loading" | "done" | "error";
 
@@ -71,11 +74,30 @@ function SeedCard({
 export default function SeedPage() {
   const seedModules = useMutation(api.basicModules.seed);
   const seedEFD = useMutation(api.basicModules.seedEFD);
+  const seedDemo = useMutation(api.demoSeed.seedDemo);
+  const seedCoaching = useAction(api.ai.coachingSeed.seed);
+  const coachingCount = useQuery(api.coaching.count, {});
 
   const [baseStatus, setBaseStatus] = useState<SeedStatus>("idle");
   const [baseMsg, setBaseMsg] = useState("");
   const [efdStatus, setEfdStatus] = useState<SeedStatus>("idle");
   const [efdMsg, setEfdMsg] = useState("");
+  const [demoStatus, setDemoStatus] = useState<SeedStatus>("idle");
+  const [demoMsg, setDemoMsg] = useState("");
+  const [coachStatus, setCoachStatus] = useState<SeedStatus>("idle");
+  const [coachMsg, setCoachMsg] = useState("");
+
+  const handleCoaching = async () => {
+    setCoachStatus("loading");
+    try {
+      const count = await seedCoaching({});
+      setCoachMsg(`${count} coaching examples embedded and indexed.`);
+      setCoachStatus("done");
+    } catch (e) {
+      setCoachMsg(String(e));
+      setCoachStatus("error");
+    }
+  };
 
   const handleBase = async () => {
     setBaseStatus("loading");
@@ -98,6 +120,20 @@ export default function SeedPage() {
     } catch (e) {
       setEfdMsg(String(e));
       setEfdStatus("error");
+    }
+  };
+
+  const handleDemo = async () => {
+    setDemoStatus("loading");
+    try {
+      const result = await seedDemo({ passwordHash: await hashPassword(DEMO_PASSWORD) });
+      // The coaching library needs embeddings (an action); build it once if it's empty.
+      if (coachingCount === 0) await seedCoaching({});
+      setDemoMsg(`Log in as ${result.lawyerEmail} or ${result.clientEmail} (password: ${DEMO_PASSWORD}).`);
+      setDemoStatus("done");
+    } catch (e) {
+      setDemoMsg(String(e));
+      setDemoStatus("error");
     }
   };
 
@@ -133,6 +169,32 @@ export default function SeedPage() {
         onSeed={handleEFD}
         status={efdStatus}
         message={efdMsg}
+      />
+
+      <SeedCard
+        title="Demo Data"
+        description="Ready-to-present lawyer, witness and matter"
+        items={[
+          "Demo lawyer and demo witness accounts",
+          "A deposition matter with 5 scripted questions",
+          "Witness assigned and all training passed",
+        ]}
+        onSeed={handleDemo}
+        status={demoStatus}
+        message={demoMsg}
+      />
+
+      <SeedCard
+        title="Coaching Library (vectors)"
+        description={`Gemini embeddings + Convex vector index · ${coachingCount ?? "…"} examples stored`}
+        items={[
+          "20 weak-answer → better-answer pairs",
+          "Embedded with gemini-embedding-001 (768 dims)",
+          "Needs GEMINI_API_KEY in Convex",
+        ]}
+        onSeed={handleCoaching}
+        status={coachStatus}
+        message={coachMsg}
       />
 
       <p className="text-xs text-center text-muted-foreground">

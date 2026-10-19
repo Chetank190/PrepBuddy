@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useConvex } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/lib/auth-context";
 import { hashPassword } from "@/lib/hash";
@@ -22,7 +22,7 @@ export default function LoginPage() {
   const { login } = useAuth();
   const router = useRouter();
 
-  const userRecord = useQuery(api.users.login, email ? { email } : "skip");
+  const convex = useConvex();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,18 +30,22 @@ export default function LoginPage() {
 
     setIsLoading(true);
     try {
-      const hashed = await hashPassword(password);
+      const result = await convex.query(api.users.login, {
+        email,
+        passwordHash: await hashPassword(password),
+      });
 
-      if (!userRecord) {
+      if (result.status === "no_account") {
         toast.error("No account found with that email");
         return;
       }
 
-      if (userRecord.passwordHash !== hashed) {
+      if (result.status === "wrong_password") {
         toast.error("Incorrect password");
         return;
       }
 
+      const userRecord = result.user;
       login({
         _id: userRecord._id,
         email: userRecord.email,

@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import {
   formatQuestionMessage,
@@ -34,6 +34,13 @@ export const getById = query({
   args: { id: v.id("sim_sessions") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
+  },
+});
+
+export const setGradingError = internalMutation({
+  args: { sessionId: v.id("sim_sessions"), error: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.sessionId, { gradingError: args.error });
   },
 });
 

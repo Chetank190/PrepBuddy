@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { toPublicUser } from "./users";
 
 export const create = mutation({
   args: {
@@ -120,7 +121,7 @@ export const getClientsForMatter = query({
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
       .collect();
     const clients = await Promise.all(links.map((l) => ctx.db.get(l.clientId)));
-    return clients.filter(Boolean);
+    return clients.filter((c) => c !== null).map(toPublicUser);
   },
 });
 

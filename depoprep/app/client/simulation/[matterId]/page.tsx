@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import { ConvexError } from "convex/values";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -185,6 +186,7 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
   const [questionAppearedAt, setQuestionAppearedAt] = useState<number | null>(null);
   const [answerMetrics, setAnswerMetrics] = useState<Map<number, VoiceMetrics>>(new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const answerInputRef = useRef<HTMLTextAreaElement>(null);
   const hasAutoStarted = useRef(false);
   const lastSpokenIndex = useRef(-1);
 
@@ -196,6 +198,11 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [activeSession?.transcript]);
+
+  // The textarea is disabled while sending, which drops focus; put it back so the next answer can be typed straight away.
+  useEffect(() => {
+    if (!isSending && !voiceMode) answerInputRef.current?.focus();
+  }, [isSending, voiceMode, activeSession?.transcript.length]);
 
   // TTS: speak new AI messages aloud when voice mode + TTS are on
   useEffect(() => {
@@ -300,11 +307,14 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
     setIsEnding(true);
     try {
       await completeSession({ sessionId });
-      await generateFeedback({ sessionId });
-      toast.success("Session complete! View your feedback below.");
+      // Grade in the background: the results page is subscribed to sim_feedback and
+      // fills in on its own, or shows a retry if the session records a grading error.
+      generateFeedback({ sessionId }).catch((err) => {
+        toast.error(err instanceof ConvexError ? String(err.data) : "Failed to generate feedback");
+      });
       router.push(`/client/simulation/${matterId}/results/${sessionId}`);
     } catch {
-      toast.error("Failed to generate feedback — try again");
+      toast.error("Failed to end the session — try again");
     } finally {
       setIsEnding(false);
     }
@@ -443,7 +453,7 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
               </div>
               <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "client" ? "items-end" : ""}`}>
                 <div
-                  className={`rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                  className={`rounded-2xl px-4 py-3 text-base leading-relaxed whitespace-pre-wrap ${
                     msg.role === "ai" ? "bg-muted text-foreground" : "bg-primary text-primary-foreground"
                   }`}
                 >
@@ -521,9 +531,13 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
 
           {/* Input area */}
           {sessionComplete ? (
-            <p className="text-center text-sm text-muted-foreground py-3">
-              All questions complete — click &ldquo;End &amp; Get Feedback&rdquo; above.
-            </p>
+            <div className="flex flex-col items-center gap-2 py-2">
+              <p className="text-sm text-muted-foreground">All questions complete.</p>
+              <Button size="lg" onClick={handleEndSession} disabled={isEnding || !sessionId}>
+                {isEnding ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <StopCircle className="w-4 h-4 mr-2" />}
+                End &amp; Get Feedback
+              </Button>
+            </div>
           ) : voiceMode ? (
             <VoiceInput
               onSubmit={(text, metrics) => handleSend(text, metrics)}
@@ -533,6 +547,8 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
           ) : (
             <div className="flex gap-3">
               <Textarea
+                ref={answerInputRef}
+                autoFocus
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={(e) => {

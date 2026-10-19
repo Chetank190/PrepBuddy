@@ -1,11 +1,12 @@
 "use node";
 
-import { action } from "../_generated/server";
+import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { api } from "../_generated/api";
 import Anthropic from "@anthropic-ai/sdk";
 
-export const sendMessage = action({
+// v1 design, unused by the app. Internal so a public deployment is not an open proxy to the Claude key.
+export const sendMessage = internalAction({
   args: {
     sessionId: v.id("sim_sessions"),
     messages: v.array(v.object({ role: v.string(), content: v.string() })),

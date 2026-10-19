@@ -1,5 +1,13 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
+
+// Password hashes never leave the backend; every query that returns a user goes through this.
+export function toPublicUser(user: Doc<"users">) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { passwordHash: _passwordHash, ...rest } = user;
+  return rest;
+}
 
 export const register = mutation({
   args: {
@@ -18,20 +26,25 @@ export const register = mutation({
   },
 });
 
+// Compares the browser-computed hash on the server, so the stored hash is never sent to clients.
 export const login = query({
-  args: { email: v.string() },
+  args: { email: v.string(), passwordHash: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const user = await ctx.db
       .query("users")
       .withIndex("by_email", (q) => q.eq("email", args.email))
       .first();
+    if (!user) return { status: "no_account" as const };
+    if (user.passwordHash !== args.passwordHash) return { status: "wrong_password" as const };
+    return { status: "ok" as const, user: toPublicUser(user) };
   },
 });
 
 export const getById = query({
   args: { id: v.id("users") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const user = await ctx.db.get(args.id);
+    return user && toPublicUser(user);
   },
 });
 
@@ -41,6 +54,7 @@ export const getAllClients = query({
     return await ctx.db
       .query("users")
       .filter((q) => q.eq(q.field("role"), "client"))
-      .collect();
+      .collect()
+      .then((users) => users.map(toPublicUser));
   },
 });

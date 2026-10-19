@@ -17,7 +17,7 @@ function moduleToRecord(mod: (typeof TRAINING_MODULES)[number]) {
   };
 }
 
-async function insertTrainingModules(ctx: { db: { insert: Function; query: Function } }) {
+export async function insertTrainingModules(ctx: { db: { insert: Function; query: Function } }) {
   for (const mod of TRAINING_MODULES) {
     await ctx.db.insert("basic_modules", moduleToRecord(mod));
   }

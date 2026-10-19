@@ -1,6 +1,39 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const dimension = v.union(
+  v.literal("volunteering"),
+  v.literal("speculation"),
+  v.literal("consistency"),
+  v.literal("brevity"),
+  v.literal("composure"),
+);
+
+export const coachingReference = v.object({
+  dimension,
+  question: v.string(),
+  badAnswer: v.string(),
+  betterAnswer: v.string(),
+  why: v.string(),
+});
+
+export const evalCaseResult = v.object({
+  caseId: v.string(),
+  title: v.string(),
+  ok: v.boolean(),
+  error: v.optional(v.string()),
+  ms: v.number(),
+  readinessScore: v.optional(v.number()),
+  inBand: v.optional(v.boolean()),
+  weakHits: v.number(),
+  weakTotal: v.number(),
+  strongHits: v.number(),
+  strongTotal: v.number(),
+  quotesGrounded: v.number(),
+  quotesTotal: v.number(),
+  referencesUsed: v.number(),
+});
+
 export default defineSchema({
   users: defineTable({
     email: v.string(),
@@ -81,6 +114,7 @@ export default defineSchema({
     ),
     startedAt: v.string(),
     endedAt: v.optional(v.string()),
+    gradingError: v.optional(v.string()),
   })
     .index("by_client", ["clientId"])
     .index("by_matter", ["matterId"]),
@@ -99,8 +133,35 @@ export default defineSchema({
     }),
     tips: v.array(v.string()),
     riskHighlights: v.array(v.string()),
+    gradedBy: v.optional(v.string()),
+    gradingMs: v.optional(v.number()),
+    fallbacks: v.optional(v.array(v.string())),
+    references: v.optional(v.array(coachingReference)),
+    rawJson: v.optional(v.string()),
   })
     .index("by_session", ["sessionId"])
     .index("by_client", ["clientId"])
     .index("by_matter", ["matterId"]),
+
+  // Coaching library for retrieval (RAG). Embeddings: gemini-embedding-001, 768 dims.
+  coaching_examples: defineTable({
+    ...coachingReference.fields,
+    embedding: v.array(v.float64()),
+  }).vectorIndex("by_embedding", {
+    vectorField: "embedding",
+    dimensions: 768,
+    filterFields: ["dimension"],
+  }),
+
+  // One row per eval run; the /evals page subscribes and shows progress live.
+  eval_runs: defineTable({
+    provider: v.string(),
+    model: v.optional(v.string()),
+    rag: v.boolean(),
+    status: v.union(v.literal("running"), v.literal("done"), v.literal("error")),
+    startedAt: v.string(),
+    totalCases: v.number(),
+    results: v.array(evalCaseResult),
+    error: v.optional(v.string()),
+  }).index("by_started", ["startedAt"]),
 });
