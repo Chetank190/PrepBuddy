@@ -28,7 +28,10 @@ function summarize(run: Doc<"eval_runs">) {
   const ok = run.results.filter((r) => r.ok);
   const sum = (f: (r: (typeof run.results)[number]) => number) => run.results.reduce((a, r) => a + f(r), 0);
   const times = ok.map((r) => r.ms).sort((a, b) => a - b);
+  // Consistency: how far apart repeated grades of the same transcript landed (max − min), averaged.
+  const spreads = ok.filter((r) => r.scores && r.scores.length > 1).map((r) => Math.max(...r.scores!) - Math.min(...r.scores!));
   return {
+    spread: spreads.length ? `±${(spreads.reduce((a, b) => a + b, 0) / spreads.length / 2).toFixed(1)}` : "—",
     valid: pct(ok.length, run.results.length),
     band: pct(ok.filter((r) => r.inBand).length, ok.length),
     weak: pct(sum((r) => r.weakHits), sum((r) => r.weakTotal)),
@@ -44,6 +47,7 @@ const METRICS = [
   { key: "weak", label: "Weak caught", help: "Planted problems scored below 70" },
   { key: "strong", label: "Clean kept", help: "Problem-free dimensions scored 70+" },
   { key: "grounded", label: "Quotes grounded", help: "Quoted risky answers that really appear in the transcript" },
+  { key: "spread", label: "Consistency", help: "Half the average gap between repeated grades of the same case (needs ×3 repeats)" },
   { key: "median", label: "Median time", help: "Per case, including retrieval" },
 ] as const;
 
@@ -53,6 +57,7 @@ export default function EvalsPage() {
   const runEval = useAction(api.ai.evals.run);
   const [provider, setProvider] = useState<Provider>("gemini");
   const [rag, setRag] = useState(false);
+  const [repeat, setRepeat] = useState(false);
   const [starting, setStarting] = useState(false);
   const [openRun, setOpenRun] = useState<Id<"eval_runs"> | null>(null);
 
@@ -61,7 +66,7 @@ export default function EvalsPage() {
   const handleRun = async () => {
     setStarting(true);
     // The action runs for ~30–90 s; progress arrives through the reactive listRuns query.
-    runEval({ provider, rag })
+    runEval({ provider, rag, repeats: repeat ? 3 : 1 })
       .catch((err) => toast.error(err instanceof ConvexError ? String(err.data) : "Eval failed"))
       .finally(() => setStarting(false));
   };
@@ -102,6 +107,10 @@ export default function EvalsPage() {
             <label className="flex items-center gap-2 text-base cursor-pointer">
               <input type="checkbox" checked={rag} onChange={(e) => setRag(e.target.checked)} className="w-4 h-4" />
               RAG (coaching references in prompt)
+            </label>
+            <label className="flex items-center gap-2 text-base cursor-pointer">
+              <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="w-4 h-4" />
+              Grade each case ×3 (consistency)
             </label>
             <Button size="lg" className="ml-auto" onClick={() => void handleRun()} disabled={running || starting}>
               {running || starting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
@@ -144,6 +153,7 @@ export default function EvalsPage() {
                             <div className="font-medium flex items-center gap-2">
                               {run.model ?? run.provider}
                               {run.rag && <Badge variant="secondary">RAG</Badge>}
+                              {(run.repeats ?? 1) > 1 && <Badge variant="secondary">×{run.repeats}</Badge>}
                               {run.status === "running" && (
                                 <Badge variant="outline" className="gap-1">
                                   <Loader2 className="w-3 h-3 animate-spin" />
@@ -185,7 +195,7 @@ export default function EvalsPage() {
                                         {r.error && <div className="text-xs text-red-600 truncate max-w-xl">{r.error}</div>}
                                       </td>
                                       <td className={`py-1.5 text-right font-mono ${r.inBand === false ? "text-red-600" : ""}`}>
-                                        {r.readinessScore ?? "—"}
+                                        {r.scores ? r.scores.join(" / ") : (r.readinessScore ?? "—")}
                                       </td>
                                       <td className="py-1.5 text-right font-mono">{r.weakHits}/{r.weakTotal}</td>
                                       <td className="py-1.5 text-right font-mono">{r.strongHits}/{r.strongTotal}</td>

@@ -8,6 +8,8 @@ import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import type { CoachingDimension } from "../coachingContent";
+import { isFollowUp } from "../simulationScript";
+import type { TraceParent, Usage } from "./tracing";
 
 export const RUBRIC_KEYS = ["volunteering", "speculation", "consistency", "brevity", "composure"] as const;
 
@@ -27,19 +29,52 @@ export type CoachingReference = {
   why: string;
 };
 
-const EVENT_LABELS = {
+export const EVENT_LABELS = {
   deposition: "deposition",
   trial_testimony: "trial cross-examination",
   settlement_conference: "settlement conference",
 } as const;
 
+export type TranscriptEntry = {
+  role: string;
+  content: string;
+  flags?: string[];
+  voice?: { fillerCount: number; fillerWords: string[]; responseDelayMs: number; pauseCount: number };
+};
+
+/** Lowercase, collapse whitespace and trim quotes/punctuation, for "does this quote appear in the answer" checks. */
+export function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\s+/g, " ")
+    .replace(/^[\s"'.,?!]+|[\s"'.,?!]+$/g, "");
+}
+
+function formatEntry(t: TranscriptEntry): string {
+  if (t.role === "ai") return `[${isFollowUp(t) ? "AI FOLLOW-UP" : "AI"}]: ${t.content}`;
+  if (!t.voice) return `[CLIENT]: ${t.content}`;
+  const v = t.voice;
+  const fillers = v.fillerCount > 0 ? `${v.fillerCount} filler words (${v.fillerWords.join(", ")})` : "no filler words";
+  return `[CLIENT] (spoken: ${(v.responseDelayMs / 1000).toFixed(1)} s before first word, ${fillers}, ${v.pauseCount} mid-answer pauses): ${t.content}`;
+}
+
 export function buildEvaluatorPrompt(
-  transcript: Array<{ role: string; content: string }>,
+  transcript: TranscriptEntry[],
   references: CoachingReference[] = [],
   eventType: keyof typeof EVENT_LABELS = "deposition",
 ): string {
-  const formatted = transcript
-    .map((t) => `[${t.role.toUpperCase()}]: ${t.content}`)
+  const formatted = transcript.map(formatEntry).join("\n");
+  const hasFollowUps = transcript.some(isFollowUp);
+  const hasVoice = transcript.some((t) => t.voice);
+  const contextNotes = [
+    hasFollowUps &&
+      "[AI FOLLOW-UP] lines are counsel pursuing something the witness volunteered or guessed; needing a follow-up is evidence of volunteering or speculation.",
+    hasVoice &&
+      "Spoken answers include delivery metrics measured in the browser. Use them for composure: many filler words or mid-answer pauses suggest nervousness. A short pause before answering (up to about 3 s) is good practice, not a weakness.",
+  ]
+    .filter(Boolean)
     .join("\n");
 
   const referenceBlock =
@@ -57,7 +92,7 @@ ${references
 
 TRANSCRIPT:
 ${formatted}
-${referenceBlock}
+${contextNotes ? `\n${contextNotes}\n` : ""}${referenceBlock}
 Return ONLY valid JSON (no markdown fences, no explanation text before or after):
 {
   "readinessScore": <0-100 overall score>,
@@ -72,7 +107,7 @@ Return ONLY valid JSON (no markdown fences, no explanation text before or after)
   "riskHighlights": ["<risky answer excerpt 1>", "<risky answer excerpt 2>"]
 }
 
-riskHighlights must be verbatim excerpts copied from the CLIENT's answers.
+riskHighlights must be verbatim excerpts copied from the CLIENT's answers, and only answers that create real risk (volunteering, guessing, contradicting, arguing). If no answer is risky, return an empty array.
 Write every explanation and tip directly to the witness as "you". Never refer to the witness as "the client" and never assume their gender.
 
 Scoring guide:
@@ -137,14 +172,18 @@ async function httpError(res: Response, label: string): Promise<ProviderHttpErro
   return new ProviderHttpError(`${label} returned ${res.status}: ${detail}`, res.status, retryAfterFrom(res, detail));
 }
 
-type ModelReply = { text: string; model: string };
+type ModelReply = { text: string; model: string; usage?: Usage };
+type CallOptions = { timeoutMs: number; schema: object; maxTokens: number };
 
-async function callGemini(apiKey: string, prompt: string, timeoutMs: number): Promise<ModelReply> {
-  const model = process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
+const geminiModel = () => process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
+const groqModel = () => process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
+
+async function callGemini(apiKey: string, prompt: string, opts: CallOptions): Promise<ModelReply> {
+  const model = geminiModel();
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return { text: await callGeminiModel(apiKey, model, prompt, timeoutMs), model };
+      return { ...(await callGeminiModel(apiKey, model, prompt, opts)), model };
     } catch (err) {
       lastError = err;
       if (!(err instanceof ProviderHttpError) || !RETRYABLE_STATUSES.includes(err.status)) throw err;
@@ -159,20 +198,22 @@ async function callGeminiModel(
   apiKey: string,
   model: string,
   prompt: string,
-  timeoutMs: number,
-): Promise<string> {
+  opts: CallOptions,
+): Promise<{ text: string; usage?: Usage }> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(opts.timeoutMs),
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.3,
+          // Without a cap, a degraded model can loop (repeating a string) for minutes before stopping.
+          maxOutputTokens: opts.maxTokens,
           responseMimeType: "application/json",
-          responseSchema: FEEDBACK_SCHEMA,
+          responseSchema: opts.schema,
         },
       }),
     },
@@ -180,53 +221,71 @@ async function callGeminiModel(
   if (!res.ok) throw await httpError(res, `Gemini (${model})`);
   const data = await res.json();
   const parts: Array<{ text?: string }> = data.candidates?.[0]?.content?.parts ?? [];
-  return parts.map((p) => p.text ?? "").join("");
+  const usage = data.usageMetadata;
+  return {
+    text: parts.map((p) => p.text ?? "").join(""),
+    usage: usage && {
+      input: usage.promptTokenCount ?? 0,
+      output: (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0),
+    },
+  };
 }
 
 // Groq speaks the OpenAI chat-completions format. JSON mode guarantees valid JSON; parseFeedback checks the shape.
-async function callGroq(apiKey: string, prompt: string, timeoutMs: number): Promise<ModelReply> {
-  const model = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
+async function callGroq(apiKey: string, prompt: string, opts: CallOptions): Promise<ModelReply> {
+  const model = groqModel();
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: AbortSignal.timeout(opts.timeoutMs),
     body: JSON.stringify({
       model,
       temperature: 0.3,
+      max_tokens: opts.maxTokens,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
     }),
   });
   if (!res.ok) throw await httpError(res, `Groq (${model})`);
   const data = await res.json();
-  return { text: data.choices?.[0]?.message?.content ?? "", model };
+  return {
+    text: data.choices?.[0]?.message?.content ?? "",
+    model,
+    usage: data.usage && { input: data.usage.prompt_tokens, output: data.usage.completion_tokens },
+  };
 }
 
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 
-async function callClaude(apiKey: string, prompt: string, timeoutMs: number): Promise<ModelReply> {
-  const anthropic = new Anthropic({ apiKey, timeout: timeoutMs });
+async function callClaude(apiKey: string, prompt: string, opts: CallOptions): Promise<ModelReply> {
+  const anthropic = new Anthropic({ apiKey, timeout: opts.timeoutMs });
   const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 1024,
+    max_tokens: opts.maxTokens,
     temperature: 0.3,
     messages: [{ role: "user", content: prompt }],
   });
   const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return { text, model: CLAUDE_MODEL };
+  return {
+    text,
+    model: CLAUDE_MODEL,
+    usage: { input: response.usage.input_tokens, output: response.usage.output_tokens },
+  };
+}
+
+export function parseJson(raw: string): unknown {
+  // Strip any accidental markdown fences the model might add
+  const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    throw new Error("The model returned invalid JSON.");
+  }
 }
 
 // Rejects incomplete responses instead of filling gaps, so a broken reply never shows up as a real-looking grade.
 export function parseFeedback(raw: string): Feedback {
-  // Strip any accidental markdown fences the model might add
-  const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/, "").trim();
-
-  let data: unknown;
-  try {
-    data = JSON.parse(cleaned);
-  } catch {
-    throw new Error("The grader returned invalid JSON.");
-  }
+  const data = parseJson(raw);
 
   const isScore = (n: unknown): n is number => typeof n === "number" && n >= 0 && n <= 100;
   const isStringArray = (a: unknown): a is string[] =>
@@ -260,35 +319,54 @@ const PROVIDERS: Array<{
   name: ProviderName;
   label: string;
   key: () => string | undefined;
-  call: (key: string, prompt: string, timeoutMs: number) => Promise<ModelReply>;
+  /** The model this provider will call; recorded in traces even when the call fails. */
+  model: () => string;
+  call: (key: string, prompt: string, opts: CallOptions) => Promise<ModelReply>;
 }> = [
-  { name: "gemini", label: "Gemini", key: () => process.env.GEMINI_API_KEY, call: callGemini },
-  { name: "groq", label: "Groq", key: () => process.env.GROQ_API_KEY, call: callGroq },
-  { name: "claude", label: "Claude", key: () => process.env.ANTHROPIC_API_KEY, call: callClaude },
+  { name: "gemini", label: "Gemini", key: () => process.env.GEMINI_API_KEY, model: geminiModel, call: callGemini },
+  { name: "groq", label: "Groq", key: () => process.env.GROQ_API_KEY, model: groqModel, call: callGroq },
+  { name: "claude", label: "Claude", key: () => process.env.ANTHROPIC_API_KEY, model: () => CLAUDE_MODEL, call: callClaude },
 ];
 
-export type GradeResult = {
-  feedback: Feedback;
+export type ChainResult<T> = {
+  value: T;
   model: string;
   rawText: string;
   ms: number;
-  fallbacks: string[]; // one entry per provider that failed before the one that graded
+  fallbacks: string[]; // one entry per provider that failed before the one that answered
 };
 
 /**
- * Fallback chain: each provider runs only if its key is set in Convex. A provider whose reply fails
- * validation counts as failed too, so the next one gets a chance. `only` pins a single provider
- * (used by the eval, which measures each provider on its own).
+ * Fallback chain for any JSON task: each provider runs only if its key is set in Convex. A reply that
+ * fails `parse` counts as a failure too, so the next provider gets a chance. `only` pins a single
+ * provider (the eval measures each provider on its own and can afford to wait out rate limits).
+ * With `trace`, the chain is one span and each provider attempt a generation inside it.
  */
-export async function gradeWithChain(
-  prompt: string | ((provider: ProviderName) => string),
-  only?: ProviderName,
-): Promise<GradeResult> {
-  const promptFor = typeof prompt === "string" ? () => prompt : prompt;
-  // Live grading fails over fast; a pinned provider (the eval) waits out rate limits instead.
+export async function chainJson<T>(opts: {
+  prompt: string | ((provider: ProviderName) => string);
+  schema: object;
+  parse: (raw: string) => T;
+  only?: ProviderName;
+  /** Provider order; defaults to Gemini → Groq → Claude. */
+  order?: ProviderName[];
+  timeoutMs?: number;
+  maxTokens?: number;
+  trace?: TraceParent;
+  /** Span name for the chain in the trace. */
+  name?: string;
+}): Promise<ChainResult<T>> {
+  const { only, schema, parse } = opts;
+  const promptFor = typeof opts.prompt === "string" ? () => opts.prompt as string : opts.prompt;
   const maxRateLimitWaits = only ? 3 : 0;
-  const timeoutMs = only ? EVAL_TIMEOUT_MS : LIVE_TIMEOUT_MS;
-  const enabled = PROVIDERS.filter((p) => (only ? p.name === only : true) && p.key());
+  const callOptions: CallOptions = {
+    timeoutMs: opts.timeoutMs ?? (only ? EVAL_TIMEOUT_MS : LIVE_TIMEOUT_MS),
+    schema,
+    maxTokens: opts.maxTokens ?? 1024,
+  };
+  const order = opts.order ?? PROVIDERS.map((p) => p.name);
+  const enabled = order
+    .map((name) => PROVIDERS.find((p) => p.name === name)!)
+    .filter((p) => (only ? p.name === only : true) && p.key());
   if (enabled.length === 0) {
     throw new Error(
       only
@@ -298,21 +376,35 @@ export async function gradeWithChain(
   }
   const started = Date.now();
   const fallbacks: string[] = [];
+  const chain = opts.trace?.start(opts.name ?? "llm-chain", "chain", {
+    metadata: { providers: enabled.map((p) => p.name).join(" → "), maxTokens: callOptions.maxTokens },
+  });
   for (const provider of enabled) {
+    const prompt = promptFor(provider.name);
+    const generation = chain?.start(provider.label, "generation", {
+      model: provider.model(),
+      input: prompt,
+      metadata: { timeoutMs: callOptions.timeoutMs },
+    });
     try {
       let reply: ModelReply | undefined;
       for (let wait = 0; !reply; wait++) {
         try {
-          reply = await provider.call(provider.key()!, promptFor(provider.name), timeoutMs);
+          reply = await provider.call(provider.key()!, prompt, callOptions);
         } catch (err) {
           const waitMs = err instanceof ProviderHttpError && err.status === 429 ? (err.retryAfterMs ?? 10_000) : 0;
           if (!waitMs || wait >= maxRateLimitWaits || waitMs > 30_000) throw err;
           console.warn(`${provider.label} rate-limited; waiting ${waitMs} ms`);
+          generation?.set({ metadata: { rateLimitWaits: wait + 1 } });
           await new Promise((r) => setTimeout(r, waitMs + 250));
         }
       }
+      generation?.set({ model: reply.model, output: reply.text, usage: reply.usage });
+      const value = parse(reply.text);
+      generation?.end();
+      chain?.set({ output: { answeredBy: reply.model, fallbacks } }).end();
       return {
-        feedback: parseFeedback(reply.text),
+        value,
         model: reply.model,
         rawText: reply.text,
         ms: Date.now() - started,
@@ -322,9 +414,31 @@ export async function gradeWithChain(
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`${provider.label} failed: ${message}`);
       fallbacks.push(`${provider.label}: ${message}`);
+      generation?.end(err);
     }
   }
-  throw new Error(fallbacks.join(" | "));
+  const error = new Error(fallbacks.join(" | "));
+  chain?.end(error);
+  throw error;
+}
+
+export type GradeResult = Omit<ChainResult<Feedback>, "value"> & { feedback: Feedback };
+
+export async function gradeWithChain(
+  prompt: string | ((provider: ProviderName) => string),
+  opts: { only?: ProviderName; trace?: TraceParent } = {},
+): Promise<GradeResult> {
+  // gpt-oss models spend part of max_tokens on reasoning, so leave headroom for the rubric JSON.
+  const { value, ...rest } = await chainJson({
+    prompt,
+    schema: FEEDBACK_SCHEMA,
+    parse: parseFeedback,
+    only: opts.only,
+    trace: opts.trace,
+    name: "grade",
+    maxTokens: 4096,
+  });
+  return { feedback: value, ...rest };
 }
 
 // ---------------------------------------------------------------------------
@@ -333,32 +447,63 @@ export async function gradeWithChain(
 
 export const EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSIONS = 768;
+const EMBEDDING_TIMEOUT_MS = 6_000;
 
 export async function embedTexts(
   texts: string[],
-  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY",
+  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" | "SEMANTIC_SIMILARITY",
+  trace?: TraceParent,
+): Promise<number[][]> {
+  const span = trace?.start("embed", "embedding", {
+    model: EMBEDDING_MODEL,
+    input: texts,
+    metadata: { taskType, count: texts.length, dimensions: EMBEDDING_DIMENSIONS },
+  });
+  try {
+    const vectors = await embedWithRetry(texts, taskType);
+    span?.end();
+    return vectors;
+  } catch (err) {
+    span?.end(err);
+    throw err;
+  }
+}
+
+async function embedWithRetry(
+  texts: string[],
+  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" | "SEMANTIC_SIMILARITY",
 ): Promise<number[][]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Embeddings need GEMINI_API_KEY.");
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      signal: AbortSignal.timeout(LIVE_TIMEOUT_MS),
-      body: JSON.stringify({
-        requests: texts.map((text) => ({
-          model: `models/${EMBEDDING_MODEL}`,
-          content: { parts: [{ text }] },
-          outputDimensionality: EMBEDDING_DIMENSIONS,
-          taskType,
-        })),
-      }),
-    },
-  );
-  if (!res.ok) throw await httpError(res, `Embeddings (${EMBEDDING_MODEL})`);
-  const data = await res.json();
-  return (data.embeddings as Array<{ values: number[] }>).map((e) => e.values);
+  // The free embedding endpoint usually answers in < 1 s but occasionally stalls; retry once, quickly.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
+          body: JSON.stringify({
+            requests: texts.map((text) => ({
+              model: `models/${EMBEDDING_MODEL}`,
+              content: { parts: [{ text }] },
+              outputDimensionality: EMBEDDING_DIMENSIONS,
+              taskType,
+            })),
+          }),
+        },
+      );
+      if (!res.ok) throw await httpError(res, `Embeddings (${EMBEDDING_MODEL})`);
+      const data = await res.json();
+      return (data.embeddings as Array<{ values: number[] }>).map((e) => e.values);
+    } catch (err) {
+      lastError = err;
+      console.warn(`Embeddings attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -384,28 +529,46 @@ export function promptGetsReferences(mode: RagMode, provider: ProviderName): boo
   return mode === "prompt" || (mode === "auto" && provider !== "gemini");
 }
 
+// Cosine similarity floor for coaching retrieval (gemini-embedding-001, RETRIEVAL_QUERY vs DOCUMENT).
+// Measured: real matches (same mistake) scored 0.73–0.83; short clean answers like "No." or "To work."
+// scored 0.61–0.66 against generic examples — the "hubness" that put the same example in every result.
+export const COACHING_MIN_SCORE = 0.72;
+
 /**
- * Embeds each witness answer, finds the closest coaching examples, and returns up to `limit`
- * distinct ones ranked by similarity. Returns [] if the library is empty.
+ * Embeds each witness answer, keeps its best coaching example if it clears COACHING_MIN_SCORE, and
+ * returns up to `limit` distinct examples ranked by similarity. Returns [] if nothing is close enough.
  */
 export async function retrieveCoaching(
   ctx: ActionCtx,
   answers: string[],
-  limit = 4,
+  opts: { limit?: number; trace?: TraceParent } = {},
 ): Promise<CoachingReference[]> {
   if (answers.length === 0) return [];
-  const vectors = await embedTexts(answers, "RETRIEVAL_QUERY");
-  const best = new Map<Id<"coaching_examples">, number>();
-  for (const vector of vectors) {
-    const hits = await ctx.vectorSearch("coaching_examples", "by_embedding", { vector, limit: 2 });
-    for (const hit of hits) {
-      best.set(hit._id, Math.max(best.get(hit._id) ?? 0, hit._score));
+  const span = opts.trace?.start("retrieve-coaching", "retriever", {
+    input: answers,
+    metadata: { minScore: COACHING_MIN_SCORE },
+  });
+  try {
+    const vectors = await embedTexts(answers, "RETRIEVAL_QUERY", span);
+    const best = new Map<Id<"coaching_examples">, number>();
+    const topScores: number[] = [];
+    for (const vector of vectors) {
+      const [top] = await ctx.vectorSearch("coaching_examples", "by_embedding", { vector, limit: 1 });
+      if (top) topScores.push(Number(top._score.toFixed(3)));
+      if (top && top._score >= COACHING_MIN_SCORE) {
+        best.set(top._id, Math.max(best.get(top._id) ?? 0, top._score));
+      }
     }
+    const ids = [...best.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, opts.limit ?? 4)
+      .map(([id]) => id);
+    const references = ids.length === 0 ? [] : await ctx.runQuery(internal.coaching.getByIds, { ids });
+    // Every answer's best score, kept or not, so the similarity floor can be tuned from the trace.
+    span?.set({ output: references.map((r) => `[${r.dimension}] ${r.badAnswer}`), metadata: { topScores: topScores.join(", ") } }).end();
+    return references;
+  } catch (err) {
+    span?.end(err);
+    throw err;
   }
-  const ids = [...best.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([id]) => id);
-  if (ids.length === 0) return [];
-  return await ctx.runQuery(internal.coaching.getByIds, { ids });
 }

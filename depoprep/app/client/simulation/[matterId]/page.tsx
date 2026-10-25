@@ -175,6 +175,7 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
   const postNextQuestion = useMutation(api.simSessions.postNextQuestion);
   const completeSession = useMutation(api.simSessions.complete);
   const generateFeedback = useAction(api.ai.feedbackEvaluator.generateFeedback);
+  const maybeFollowUp = useAction(api.ai.followUp.maybeAsk);
 
   const [phase, setPhase] = useState<"confidence" | "chat">("confidence");
   const [message, setMessage] = useState("");
@@ -289,7 +290,25 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 
     try {
-      await addMessage({ sessionId, role: "client", content });
+      await addMessage({
+        sessionId,
+        role: "client",
+        content,
+        voice: metrics
+          ? {
+              fillerCount: metrics.fillerCount,
+              fillerWords: metrics.fillerWords,
+              confidence: metrics.confidence,
+              responseDelayMs: metrics.responseDelayMs,
+              wordCount: metrics.wordCount,
+              pauseCount: metrics.pauseCount,
+            }
+          : undefined,
+      });
+      // Counsel may pursue something the witness volunteered (at most once per scripted question).
+      // A failed or slow follow-up must never block the deposition, so errors fall through to the script.
+      const followUp = await maybeFollowUp({ sessionId }).catch(() => ({ asked: false }));
+      if (followUp.asked) return;
       const result = await postNextQuestion({ sessionId });
       if (result.done) {
         toast.success("All planned questions complete. End the session for feedback.");
@@ -440,7 +459,7 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
 
           {transcript.map((msg, i) => {
             const clientMsgIdx = transcript.slice(0, i + 1).filter((t) => t.role === "client").length - 1;
-            const metrics = msg.role === "client" ? answerMetrics.get(clientMsgIdx) : undefined;
+            const metrics = msg.role === "client" ? (answerMetrics.get(clientMsgIdx) ?? msg.voice) : undefined;
 
             return (
             <div key={i} className={`flex gap-3 ${msg.role === "client" ? "flex-row-reverse" : ""}`}>

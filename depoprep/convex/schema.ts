@@ -17,6 +17,26 @@ export const coachingReference = v.object({
   why: v.string(),
 });
 
+// Delivery metrics measured in the browser (Web Speech API) for a spoken answer.
+export const voiceMetrics = v.object({
+  fillerCount: v.number(),
+  fillerWords: v.array(v.string()),
+  confidence: v.number(),
+  responseDelayMs: v.number(),
+  wordCount: v.number(),
+  pauseCount: v.number(),
+});
+
+// A statement in this session that conflicts with something the witness said in an earlier session.
+export const priorInconsistency = v.object({
+  question: v.string(),
+  currentAnswer: v.string(),
+  previousQuestion: v.string(),
+  previousAnswer: v.string(),
+  previousDate: v.string(),
+  explanation: v.string(),
+});
+
 export const evalCaseResult = v.object({
   caseId: v.string(),
   title: v.string(),
@@ -32,6 +52,7 @@ export const evalCaseResult = v.object({
   quotesGrounded: v.number(),
   quotesTotal: v.number(),
   referencesUsed: v.number(),
+  scores: v.optional(v.array(v.number())), // readiness score of every repeat, when repeats > 1
 });
 
 export default defineSchema({
@@ -110,6 +131,7 @@ export default defineSchema({
         content: v.string(),
         timestamp: v.string(),
         flags: v.optional(v.array(v.string())),
+        voice: v.optional(voiceMetrics),
       })
     ),
     startedAt: v.string(),
@@ -137,6 +159,7 @@ export default defineSchema({
     gradingMs: v.optional(v.number()),
     fallbacks: v.optional(v.array(v.string())),
     references: v.optional(v.array(coachingReference)),
+    priorInconsistencies: v.optional(v.array(priorInconsistency)),
     rawJson: v.optional(v.string()),
   })
     .index("by_session", ["sessionId"])
@@ -153,11 +176,25 @@ export default defineSchema({
     filterFields: ["dimension"],
   }),
 
+  // Every graded answer, embedded, so later sessions can be checked against prior statements.
+  answer_memories: defineTable({
+    clientId: v.id("users"),
+    matterId: v.id("matters"),
+    sessionId: v.id("sim_sessions"),
+    question: v.string(),
+    answer: v.string(),
+    answeredAt: v.string(),
+    embedding: v.array(v.float64()),
+  })
+    .index("by_client", ["clientId"])
+    .vectorIndex("by_embedding", { vectorField: "embedding", dimensions: 768, filterFields: ["clientId"] }),
+
   // One row per eval run; the /evals page subscribes and shows progress live.
   eval_runs: defineTable({
     provider: v.string(),
     model: v.optional(v.string()),
     rag: v.boolean(),
+    repeats: v.optional(v.number()),
     status: v.union(v.literal("running"), v.literal("done"), v.literal("error")),
     startedAt: v.string(),
     totalCases: v.number(),

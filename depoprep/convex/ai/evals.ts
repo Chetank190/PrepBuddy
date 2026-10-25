@@ -9,19 +9,11 @@ import {
   buildEvaluatorPrompt,
   gradeWithChain,
   retrieveCoaching,
+  normalizeText as normalize,
   RUBRIC_KEYS,
   type CoachingReference,
 } from "./grader";
-
-// Lowercase, collapse whitespace and trim quotes/punctuation so "Maybe 70?" matches maybe 70.
-function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, " ")
-    .replace(/^[\s"'.,?!]+|[\s"'.,?!]+$/g, "");
-}
+import { Trace } from "./tracing";
 
 /**
  * Runs every labelled case through one provider (no fallback) and records, per case:
@@ -33,13 +25,17 @@ export const run = action({
   args: {
     provider: v.union(v.literal("gemini"), v.literal("groq"), v.literal("claude")),
     rag: v.boolean(),
+    // Grade each case this many times (1–3) to measure how consistent the judge is.
+    repeats: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<Id<"eval_runs">> => {
     const blocked = await ctx.runQuery(internal.evals.blockedReason, {});
     if (blocked) throw new ConvexError(blocked);
+    const repeats = Math.min(Math.max(Math.round(args.repeats ?? 1), 1), 3);
     const runId = await ctx.runMutation(internal.evals.start, {
       provider: args.provider,
       rag: args.rag,
+      repeats,
       totalCases: EVAL_CASES.length,
     });
 
@@ -51,13 +47,24 @@ export const run = action({
         const answers = testCase.transcript.filter((t) => t.role === "client").map((t) => t.content);
         const started = Date.now();
         let references: CoachingReference[] = [];
+        // One trace per case, grouped by run in Langfuse's Sessions view.
+        const trace = new Trace("eval-case", {
+          sessionId: runId,
+          tags: ["eval", args.provider, args.rag ? "rag" : "no-rag"],
+          metadata: { caseId: testCase.id, band: testCase.band.join("–") },
+          input: testCase.transcript,
+        });
         try {
-          if (args.rag) references = await retrieveCoaching(ctx, answers);
-          const { feedback, model } = await gradeWithChain(
-            buildEvaluatorPrompt(testCase.transcript, references),
-            args.provider,
-          );
+          if (args.rag) references = await retrieveCoaching(ctx, answers, { trace });
+          const prompt = buildEvaluatorPrompt(testCase.transcript, references);
+          const { feedback, model } = await gradeWithChain(prompt, { only: args.provider, trace });
           const ms = Date.now() - started;
+          // Extra repeats only feed the consistency measure; all other metrics use the first grade.
+          const scores = [feedback.readinessScore];
+          for (let r = 1; r < repeats; r++) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            scores.push((await gradeWithChain(prompt, { only: args.provider, trace })).feedback.readinessScore);
+          }
           const score = (k: (typeof RUBRIC_KEYS)[number]) => feedback.rubric[k].score;
           const answerText = answers.map(normalize).join("\n");
           const grounded = feedback.riskHighlights.filter((q) => {
@@ -83,9 +90,12 @@ export const run = action({
               quotesGrounded: grounded,
               quotesTotal: feedback.riskHighlights.length,
               referencesUsed: references.length,
+              scores: repeats > 1 ? scores : undefined,
             },
           });
+          await trace.set({ output: { scores, rubric: feedback.rubric, riskHighlights: feedback.riskHighlights } }).flush(ctx);
         } catch (err) {
+          await trace.flush(ctx, err);
           await ctx.runMutation(internal.evals.appendResult, {
             runId,
             result: {

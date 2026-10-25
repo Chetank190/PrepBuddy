@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { internalQuery, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { insertTrainingModules } from "./basicModules";
 
@@ -140,6 +140,11 @@ export const seedDemo = mutation({
       .withIndex("by_client", (q) => q.eq("clientId", clientId))
       .collect();
     for (const f of oldFeedback) await ctx.db.delete(f._id);
+    const oldMemories = await ctx.db
+      .query("answer_memories")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+    for (const m of oldMemories) await ctx.db.delete(m._id);
 
     // Mark every module passed so the simulation is unlocked.
     const modules = await ctx.db.query("basic_modules").collect();
@@ -158,5 +163,27 @@ export const seedDemo = mutation({
     }
 
     return { lawyerEmail: DEMO_LAWYER_EMAIL, clientEmail: DEMO_CLIENT_EMAIL };
+  },
+});
+
+/** Ids the pre-talk warm-up needs: the demo witness and the live-demo matter. */
+export const demoIds = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const client = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", DEMO_CLIENT_EMAIL))
+      .first();
+    const lawyer = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", DEMO_LAWYER_EMAIL))
+      .first();
+    if (!client || !lawyer) return null;
+    const matters = await ctx.db
+      .query("matters")
+      .withIndex("by_lawyerId", (q) => q.eq("lawyerId", lawyer._id))
+      .collect();
+    const matter = matters.find((m) => m.title === DEMO_MATTERS[0].title);
+    return matter ? { clientId: client._id, matterId: matter._id } : null;
   },
 });

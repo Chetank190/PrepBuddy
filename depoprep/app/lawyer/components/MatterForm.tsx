@@ -1,12 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import { useAction } from "convex/react";
+import { ConvexError } from "convex/values";
+import { api } from "@/convex/_generated/api";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { ArrowLeft, X, Plus, GripVertical } from "lucide-react";
+import { ArrowLeft, X, Plus, GripVertical, Loader2, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 export const EVENT_TYPES = [
@@ -77,6 +81,24 @@ export function MatterForm({
     if (q) {
       setCustomQuestions([...customQuestions, q]);
       setQuestionInput("");
+    }
+  };
+
+  const suggestQuestions = useAction(api.ai.questionDrafts.suggest);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+
+  // The LLM drafts; the lawyer reviews, removes or reorders before saving.
+  const handleSuggest = async () => {
+    setIsSuggesting(true);
+    try {
+      const drafts = await suggestQuestions({ eventType, caseSummary, riskTags });
+      const fresh = drafts.filter((d) => !customQuestions.includes(d));
+      setCustomQuestions([...customQuestions, ...fresh]);
+      toast.success(`Added ${fresh.length} draft questions. Review them before saving.`);
+    } catch (err) {
+      toast.error(err instanceof ConvexError ? String(err.data) : "Couldn't draft questions");
+    } finally {
+      setIsSuggesting(false);
     }
   };
 
@@ -181,7 +203,7 @@ export function MatterForm({
             <div className="space-y-2">
               <Label>Custom Questions</Label>
               <p className="text-xs text-muted-foreground">
-                Add specific questions for the AI to ask. The AI will use these in order, then probe risk areas. At least one question is required for clients to start simulations.
+                The questions opposing counsel will ask, in order. Type your own or let AI draft some from the case summary and risk areas, then edit. At least one question is required for clients to start simulations.
               </p>
               <div className="flex gap-2">
                 <Input
@@ -194,6 +216,15 @@ export function MatterForm({
                   <Plus className="w-4 h-4" />
                 </Button>
               </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void handleSuggest()}
+                disabled={isSuggesting || caseSummary.trim().length < 20}
+              >
+                {isSuggesting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                Suggest questions with AI
+              </Button>
               {customQuestions.length > 0 && (
                 <div className="space-y-2 mt-2">
                   {customQuestions.map((q, idx) => (

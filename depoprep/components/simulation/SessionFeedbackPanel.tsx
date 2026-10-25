@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { AlertTriangle, BookOpen, Lightbulb } from "lucide-react";
+import { AlertTriangle, BookOpen, History, Lightbulb } from "lucide-react";
 
 export const READINESS_REPEAT_THRESHOLD = 70;
 
@@ -24,6 +24,13 @@ export type SessionFeedback = {
     badAnswer: string;
     betterAnswer: string;
     why: string;
+  }>;
+  priorInconsistencies?: Array<{
+    question: string;
+    currentAnswer: string;
+    previousAnswer: string;
+    previousDate: string;
+    explanation: string;
   }>;
 };
 
@@ -150,6 +157,38 @@ export function SessionFeedbackPanel({
                 </li>
               ))}
             </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {feedback.priorInconsistencies && feedback.priorInconsistencies.length > 0 && (
+        <Card className="border-amber-300">
+          <CardHeader>
+            <CardTitle className="text-lg text-amber-800 flex items-center gap-2">
+              <History className="w-4 h-4" />
+              Changed Since Last Time
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Opposing counsel can use prior statements against you. Found by comparing this session with your
+              earlier ones (vector search + LLM check).
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {feedback.priorInconsistencies.map((p, i) => (
+              <div key={i} className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-1.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{p.question}</p>
+                <p className="text-base">
+                  <span className="text-muted-foreground">
+                    {new Date(p.previousDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}:
+                  </span>{" "}
+                  &ldquo;{p.previousAnswer}&rdquo;
+                </p>
+                <p className="text-base">
+                  <span className="text-muted-foreground">Today:</span> &ldquo;{p.currentAnswer}&rdquo;
+                </p>
+                <p className="text-sm text-amber-900">{p.explanation}</p>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}

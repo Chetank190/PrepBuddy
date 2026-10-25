@@ -1,6 +1,6 @@
 import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { coachingReference } from "./schema";
+import { coachingReference, priorInconsistency } from "./schema";
 
 // Internal: only the grader action writes feedback.
 export const save = internalMutation({
@@ -22,6 +22,7 @@ export const save = internalMutation({
     gradingMs: v.optional(v.number()),
     fallbacks: v.optional(v.array(v.string())),
     references: v.optional(v.array(coachingReference)),
+    priorInconsistencies: v.optional(v.array(priorInconsistency)),
     rawJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -56,5 +57,13 @@ export const listByClient = query({
       .query("sim_feedback")
       .withIndex("by_client", (q) => q.eq("clientId", args.clientId))
       .collect();
+  },
+});
+
+// Internal: the grader adds prior-statement findings after the grade is already visible.
+export const setPriorInconsistencies = internalMutation({
+  args: { feedbackId: v.id("sim_feedback"), priorInconsistencies: v.array(priorInconsistency) },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.feedbackId, { priorInconsistencies: args.priorInconsistencies });
   },
 });

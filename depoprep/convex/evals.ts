@@ -39,7 +39,7 @@ export const blockedReason = internalQuery({
 });
 
 export const start = internalMutation({
-  args: { provider: v.string(), rag: v.boolean(), totalCases: v.number() },
+  args: { provider: v.string(), rag: v.boolean(), repeats: v.number(), totalCases: v.number() },
   handler: async (ctx, args) => {
     return await ctx.db.insert("eval_runs", {
       ...args,

@@ -1,6 +1,8 @@
 import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { voiceMetrics } from "./schema";
 import {
+  FOLLOW_UP_FLAG_PREFIX,
   formatQuestionMessage,
   getSessionClosingMessage,
 } from "./simulationScript";
@@ -70,6 +72,7 @@ export const addMessage = mutation({
     role: v.union(v.literal("ai"), v.literal("client")),
     content: v.string(),
     flags: v.optional(v.array(v.string())),
+    voice: v.optional(voiceMetrics),
   },
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
@@ -80,6 +83,7 @@ export const addMessage = mutation({
       content: args.content,
       timestamp: new Date().toISOString(),
       flags: args.flags,
+      voice: args.voice,
     };
 
     await ctx.db.patch(args.sessionId, {
@@ -154,6 +158,26 @@ export const complete = mutation({
     await ctx.db.patch(args.sessionId, {
       status: "completed",
       endedAt: new Date().toISOString(),
+    });
+  },
+});
+
+// Internal: only the follow-up action posts improvised questions, and only one per scripted question.
+export const appendFollowUp = internalMutation({
+  args: { sessionId: v.id("sim_sessions"), question: v.string(), quote: v.string() },
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.status !== "active") return;
+    await ctx.db.patch(args.sessionId, {
+      transcript: [
+        ...session.transcript,
+        {
+          role: "ai" as const,
+          content: args.question,
+          timestamp: new Date().toISOString(),
+          flags: [`${FOLLOW_UP_FLAG_PREFIX}\u201c${args.quote}\u201d`],
+        },
+      ],
     });
   },
 });

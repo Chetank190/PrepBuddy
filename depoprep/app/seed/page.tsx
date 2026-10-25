@@ -77,6 +77,21 @@ export default function SeedPage() {
   const seedDemo = useMutation(api.demoSeed.seedDemo);
   const seedCoaching = useAction(api.ai.coachingSeed.seed);
   const coachingCount = useQuery(api.coaching.count, {});
+  const warmUp = useAction(api.ai.demoPrep.runDisciplinedSession);
+  const [warmStatus, setWarmStatus] = useState<SeedStatus>("idle");
+  const [warmMsg, setWarmMsg] = useState("");
+
+  const handleWarmUp = async () => {
+    setWarmStatus("loading");
+    try {
+      const score = await warmUp({});
+      setWarmMsg(`Disciplined session graded ${score}. The live chatty run will be compared with it.`);
+      setWarmStatus("done");
+    } catch (e) {
+      setWarmMsg(String(e));
+      setWarmStatus("error");
+    }
+  };
 
   const [baseStatus, setBaseStatus] = useState<SeedStatus>("idle");
   const [baseMsg, setBaseMsg] = useState("");
@@ -182,6 +197,19 @@ export default function SeedPage() {
         onSeed={handleDemo}
         status={demoStatus}
         message={demoMsg}
+      />
+
+      <SeedCard
+        title="Pre-talk Warm-up"
+        description="Run after Demo Data, right before presenting"
+        items={[
+          "Runs and grades a disciplined session for the demo witness",
+          "Gives the live chatty run earlier answers to contradict",
+          "Warms up the AI providers",
+        ]}
+        onSeed={handleWarmUp}
+        status={warmStatus}
+        message={warmMsg}
       />
 
       <SeedCard

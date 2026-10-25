@@ -27,3 +27,24 @@ export function formatQuestionMessage(
   }
   return question;
 }
+
+/** Marks an AI follow-up in transcript `flags`; the rest of the flag is the volunteered phrase. */
+export const FOLLOW_UP_FLAG_PREFIX = "Follow-up on: ";
+
+export function isFollowUp(entry: { role: string; flags?: string[] }): boolean {
+  return entry.role === "ai" && (entry.flags ?? []).some((f) => f.startsWith(FOLLOW_UP_FLAG_PREFIX));
+}
+
+/** Pairs each client answer with the AI question just before it (opening line stripped). */
+export function questionAnswerPairs(
+  transcript: Array<{ role: string; content: string }>,
+): Array<{ question: string; answer: string }> {
+  const pairs: Array<{ question: string; answer: string }> = [];
+  transcript.forEach((entry, i) => {
+    const previous = transcript[i - 1];
+    if (entry.role !== "client" || previous?.role !== "ai") return;
+    const question = previous.content.split("\n\n").pop() ?? previous.content;
+    pairs.push({ question, answer: entry.content });
+  });
+  return pairs;
+}
