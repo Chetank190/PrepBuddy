@@ -54,6 +54,7 @@ interface SpeechRecognitionInstance extends EventTarget {
   stop(): void;
   abort(): void;
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onaudiostart: (() => void) | null;
   onspeechend: (() => void) | null;
   onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
@@ -75,6 +76,10 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
   const [pauseCount, setPauseCount] = useState(0);
   const [firstWordAt, setFirstWordAt] = useState<number | null>(null);
   const [isSupported, setIsSupported] = useState(true);
+  // Chrome takes ~0.5–1.5 s to open the microphone after start(); words spoken before that are lost.
+  // So the panel says "Starting microphone…" until audio capture really begins, then "Speak now".
+  const [micReady, setMicReady] = useState(false);
+  const [micError, setMicError] = useState("");
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const pauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,6 +88,8 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
   const pauseCountRef = useRef(0);
   const firstWordAtRef = useRef<number | null>(null);
   const finalTextRef = useRef("");
+  // The recognition callbacks are created once, so they read the listening state from a ref.
+  const listeningRef = useRef(false);
 
   useEffect(() => {
     const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -144,6 +151,8 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
       setInterimText(interim);
     };
 
+    recognition.onaudiostart = () => setMicReady(true);
+
     recognition.onspeechend = () => {
       pauseCountRef.current += 1;
       setPauseCount(pauseCountRef.current);
@@ -151,15 +160,21 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      if (event.error !== "no-speech") {
+      if (event.error !== "no-speech" && event.error !== "aborted") {
         console.error("Speech recognition error:", event.error);
+        setMicError(
+          event.error === "not-allowed"
+            ? "Microphone blocked: allow it in the address bar, or switch to Text."
+            : `Voice input stopped (${event.error}). Tap the mic to try again, or switch to Text.`,
+        );
         stopListening();
       }
     };
 
     recognition.onend = () => {
-      // Auto-restart if still in listening mode (continuous recognition stops on silence)
-      if (isListening && finalTextRef.current.length === 0) {
+      // Chrome ends a session after a stretch of silence. If nothing was said yet, keep listening.
+      if (listeningRef.current && finalTextRef.current.length === 0) {
+        setMicReady(false);
         try { recognition.start(); } catch { /* already starting */ }
       }
     };
@@ -240,13 +255,20 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
 
   const stopListening = () => {
     clearPauseTimer();
+    listeningRef.current = false;
     setIsListening(false);
+    setMicReady(false);
     try { recognitionRef.current?.stop(); } catch { /* ignore */ }
   };
 
   const startListening = () => {
     if (!recognitionRef.current || disabled) return;
     resetState();
+    setMicError("");
+    setMicReady(false);
+    // Stop counsel's voice so the microphone doesn't transcribe the question being read aloud.
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    listeningRef.current = true;
     setIsListening(true);
     try { recognitionRef.current.start(); } catch { /* ignore if already running */ }
   };
@@ -282,6 +304,7 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
           <Mic className="w-7 h-7 text-primary-foreground" />
         </div>
         <span className="text-xs text-muted-foreground">Tap to speak</span>
+        {micError && <span className="text-xs text-red-600 max-w-xs text-center">{micError}</span>}
       </button>
     );
   }
@@ -299,7 +322,13 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
             {interimText && <span className="text-muted-foreground"> {interimText}</span>}
           </>
         ) : (
-          <span className="text-muted-foreground animate-pulse">Listening…</span>
+          micReady ? (
+            <span className="text-primary font-medium animate-pulse">Speak now</span>
+          ) : (
+            <span className="text-muted-foreground flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting microphone… wait for “Speak now”
+            </span>
+          )
         )}
       </div>
 
@@ -334,8 +363,8 @@ export function VoiceInput({ onSubmit, disabled, questionAppearedAt }: VoiceInpu
       <div className="flex items-center gap-2">
         {/* Pulsing recording indicator */}
         <div className="flex items-center gap-2 flex-1">
-          <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-          <span className="text-xs text-muted-foreground">Recording</span>
+          <span className={`w-2.5 h-2.5 rounded-full ${micReady ? "bg-red-500 animate-pulse" : "bg-amber-400"}`} />
+          <span className="text-xs text-muted-foreground">{micReady ? "Recording" : "Starting…"}</span>
         </div>
 
         <button
