@@ -6,6 +6,7 @@ import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import {
   buildEvaluatorPrompt,
+  findGraderDirectedAnswers,
   gradeWithChain,
   promptGetsReferences,
   ragMode,
@@ -28,12 +29,14 @@ export const generateFeedback = action({
     await ctx.runMutation(internal.simSessions.setGradingError, { sessionId: args.sessionId });
 
     const mode = ragMode();
+    // Answers that talk to the grader (prompt injection); shown to the lawyer and used to reject obeyed grades.
+    const manipulationAttempts = findGraderDirectedAnswers(session.transcript);
     // One trace per grading: retrieval, the prior-statement check and every grader attempt.
     const trace = new Trace("grade-session", {
       sessionId: args.sessionId,
       userId: session.clientId,
-      tags: ["live"],
-      metadata: { matterId: session.matterId, ragMode: mode },
+      tags: manipulationAttempts.length > 0 ? ["live", "injection-suspected"] : ["live"],
+      metadata: { matterId: session.matterId, ragMode: mode, manipulationAttempts: manipulationAttempts.length },
       input: session.transcript,
     });
 
@@ -66,7 +69,7 @@ export const generateFeedback = action({
             promptGetsReferences(mode, provider) ? references : [],
             matter?.eventType,
           ),
-        { trace },
+        { trace, suspectAnswers: manipulationAttempts },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -88,6 +91,7 @@ export const generateFeedback = action({
       gradingMs: result.ms,
       fallbacks: result.fallbacks,
       references,
+      manipulationAttempts: manipulationAttempts.length > 0 ? manipulationAttempts : undefined,
       rawJson: result.rawText,
     });
 

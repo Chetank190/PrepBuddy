@@ -5,7 +5,7 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { CheckCircle, Database, Loader2 } from "lucide-react";
+import { CheckCircle, Database, Loader2, Stethoscope } from "lucide-react";
 import { hashPassword } from "@/lib/hash";
 
 const DEMO_PASSWORD = "demo1234";
@@ -64,6 +64,68 @@ function SeedCard({
             <><CheckCircle className="w-4 h-4 mr-2" />Done — Seed Again</>
           ) : (
             <><Database className="w-4 h-4 mr-2" />Seed</>
+          )}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+type PreflightCheck = { name: string; status: "ok" | "warn" | "fail"; detail: string };
+
+const CHECK_STYLES: Record<PreflightCheck["status"], string> = {
+  ok: "bg-green-50 border-green-200 text-green-800",
+  warn: "bg-amber-50 border-amber-200 text-amber-900",
+  fail: "bg-red-50 border-red-200 text-red-800",
+};
+
+// One tiny call per AI provider, plus embeddings, Langfuse, demo data and leftover test overrides.
+function PreflightCard() {
+  const preflight = useAction(api.ai.demoPrep.preflight);
+  const [checks, setChecks] = useState<PreflightCheck[] | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    setRunning(true);
+    setError("");
+    try {
+      setChecks(await preflight({}));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
+            <Stethoscope className="w-5 h-5 text-primary" />
+          </div>
+          <div>
+            <CardTitle>Preflight Check</CardTitle>
+            <CardDescription>Before presenting: are the AI providers and tracing up?</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {checks?.map((c) => (
+          <div key={c.name} className={`p-3 border rounded-lg text-sm ${CHECK_STYLES[c.status]}`}>
+            <p className="font-medium">
+              {c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗"} {c.name}
+            </p>
+            <p className="text-xs mt-0.5 break-words">{c.detail}</p>
+          </div>
+        ))}
+        {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">Error: {error}</div>}
+        <Button className="w-full" onClick={run} disabled={running}>
+          {running ? (
+            <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Checking (up to 30 s)...</>
+          ) : (
+            <><Stethoscope className="w-4 h-4 mr-2" />{checks ? "Check Again" : "Run Checks"}</>
           )}
         </Button>
       </CardContent>
@@ -198,6 +260,8 @@ export default function SeedPage() {
         status={demoStatus}
         message={demoMsg}
       />
+
+      <PreflightCard />
 
       <SeedCard
         title="Pre-talk Warm-up"

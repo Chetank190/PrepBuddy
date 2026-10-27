@@ -160,6 +160,8 @@ export default defineSchema({
     fallbacks: v.optional(v.array(v.string())),
     references: v.optional(v.array(coachingReference)),
     priorInconsistencies: v.optional(v.array(priorInconsistency)),
+    // Answers addressed to the AI grader (prompt-injection attempts); graded as testimony, never followed.
+    manipulationAttempts: v.optional(v.array(v.string())),
     rawJson: v.optional(v.string()),
   })
     .index("by_session", ["sessionId"])

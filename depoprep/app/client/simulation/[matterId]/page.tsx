@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { VoiceInput, AnswerMetricBadge } from "@/components/simulation/VoiceInput";
 import type { VoiceMetrics } from "@/components/simulation/VoiceInput";
+import { COUNSEL_VOICE_KEY, pickCounselVoice, rankVoices } from "@/lib/counselVoice";
 
 const CONFIDENCE_QUESTIONS = [
   {
@@ -190,6 +191,10 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
   const answerInputRef = useRef<HTMLTextAreaElement>(null);
   const hasAutoStarted = useRef(false);
   const lastSpokenIndex = useRef(-1);
+  // English voices, most natural first, and the one chosen for counsel (remembered on this browser).
+  const [counselVoices, setCounselVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [counselVoiceName, setCounselVoiceName] = useState<string | null>(null);
+  const counselVoice = useRef<SpeechSynthesisVoice | undefined>(undefined);
 
   const plannedQuestions = matter?.customQuestions ?? [];
   const maxQuestions = plannedQuestions.length;
@@ -205,6 +210,54 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
     if (!isSending && !voiceMode) answerInputRef.current?.focus();
   }, [isSending, voiceMode, activeSession?.transcript.length]);
 
+  // Chrome loads voices asynchronously, so getVoices() can be empty until "voiceschanged" fires.
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(COUNSEL_VOICE_KEY);
+    } catch {}
+    const load = () => {
+      const all = window.speechSynthesis.getVoices();
+      if (all.length === 0) return;
+      setCounselVoices(rankVoices(all));
+      setCounselVoiceName((current) => current ?? pickCounselVoice(all, saved)?.name ?? null);
+    };
+    load();
+    window.speechSynthesis.addEventListener("voiceschanged", load);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", load);
+  }, []);
+
+  useEffect(() => {
+    counselVoice.current = counselVoices.find((v) => v.name === counselVoiceName);
+  }, [counselVoices, counselVoiceName]);
+
+  const speakAsCounsel = (text: string) => {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95;
+    utterance.pitch = 1.0;
+    if (counselVoice.current) utterance.voice = counselVoice.current;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const chooseCounselVoice = (name: string) => {
+    setCounselVoiceName(name);
+    try {
+      localStorage.setItem(COUNSEL_VOICE_KEY, name);
+    } catch {}
+    const voice = counselVoices.find((v) => v.name === name);
+    if (voice) {
+      // Preview, so the voice can be picked by ear before the deposition starts.
+      window.speechSynthesis.cancel();
+      const sample = new SpeechSynthesisUtterance("Please state your name for the record.");
+      sample.voice = voice;
+      sample.rate = 0.95;
+      window.speechSynthesis.speak(sample);
+    }
+  };
+
   // TTS: speak new AI messages aloud when voice mode + TTS are on
   useEffect(() => {
     if (!ttsEnabled || !voiceMode || !activeSession) return;
@@ -215,19 +268,7 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
     if (newIdx > lastSpokenIndex.current && aiMessages[newIdx]) {
       lastSpokenIndex.current = newIdx;
       setQuestionAppearedAt(Date.now());
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(aiMessages[newIdx].content);
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
-        // Pick a voice — prefer a female English voice for "opposing counsel"
-        const voices = window.speechSynthesis.getVoices();
-        const preferred = voices.find((v) => v.lang.startsWith("en") && v.name.toLowerCase().includes("female"))
-          ?? voices.find((v) => v.lang.startsWith("en"))
-          ?? voices[0];
-        if (preferred) utterance.voice = preferred;
-        window.speechSynthesis.speak(utterance);
-      }
+      speakAsCounsel(aiMessages[newIdx].content);
     }
   }, [activeSession?.transcript, ttsEnabled, voiceMode]);
 
@@ -537,14 +578,31 @@ export default function SimulationPage({ params }: { params: Promise<{ matterId:
               </button>
             </div>
             {voiceMode && (
-              <button
-                onClick={() => setTtsEnabled(!ttsEnabled)}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                title={ttsEnabled ? "Turn off AI voice" : "Turn on AI voice"}
-              >
-                {ttsEnabled ? <Volume2 className="w-4 h-4 text-primary" /> : <VolumeX className="w-4 h-4" />}
-                <span>{ttsEnabled ? "AI voice on" : "AI voice off"}</span>
-              </button>
+              <div className="flex items-center gap-3">
+                {ttsEnabled && counselVoices.length > 0 && (
+                  <select
+                    value={counselVoiceName ?? ""}
+                    onChange={(e) => chooseCounselVoice(e.target.value)}
+                    className="max-w-[12rem] truncate rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
+                    title="Counsel's voice (most natural first)"
+                    aria-label="Counsel's voice"
+                  >
+                    {counselVoices.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() => setTtsEnabled(!ttsEnabled)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  title={ttsEnabled ? "Turn off AI voice" : "Turn on AI voice"}
+                >
+                  {ttsEnabled ? <Volume2 className="w-4 h-4 text-primary" /> : <VolumeX className="w-4 h-4" />}
+                  <span>{ttsEnabled ? "AI voice on" : "AI voice off"}</span>
+                </button>
+              </div>
             )}
           </div>
 

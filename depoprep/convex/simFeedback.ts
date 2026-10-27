@@ -23,6 +23,7 @@ export const save = internalMutation({
     fallbacks: v.optional(v.array(v.string())),
     references: v.optional(v.array(coachingReference)),
     priorInconsistencies: v.optional(v.array(priorInconsistency)),
+    manipulationAttempts: v.optional(v.array(v.string())),
     rawJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {

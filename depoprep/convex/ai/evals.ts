@@ -7,6 +7,7 @@ import type { Id } from "../_generated/dataModel";
 import { EVAL_CASES } from "../evalCases";
 import {
   buildEvaluatorPrompt,
+  findGraderDirectedAnswers,
   gradeWithChain,
   retrieveCoaching,
   normalizeText as normalize,
@@ -57,13 +58,19 @@ export const run = action({
         try {
           if (args.rag) references = await retrieveCoaching(ctx, answers, { trace });
           const prompt = buildEvaluatorPrompt(testCase.transcript, references);
-          const { feedback, model } = await gradeWithChain(prompt, { only: args.provider, trace });
+          // Same injection defence as the live grader, so the eval measures what witnesses get.
+          const gradeOpts = {
+            only: args.provider,
+            trace,
+            suspectAnswers: findGraderDirectedAnswers(testCase.transcript),
+          };
+          const { feedback, model } = await gradeWithChain(prompt, gradeOpts);
           const ms = Date.now() - started;
           // Extra repeats only feed the consistency measure; all other metrics use the first grade.
           const scores = [feedback.readinessScore];
           for (let r = 1; r < repeats; r++) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
-            scores.push((await gradeWithChain(prompt, { only: args.provider, trace })).feedback.readinessScore);
+            scores.push((await gradeWithChain(prompt, gradeOpts)).feedback.readinessScore);
           }
           const score = (k: (typeof RUBRIC_KEYS)[number]) => feedback.rubric[k].score;
           const answerText = answers.map(normalize).join("\n");

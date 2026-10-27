@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { AlertTriangle, BookOpen, History, Lightbulb } from "lucide-react";
+import { AlertTriangle, BookOpen, History, Lightbulb, ShieldAlert } from "lucide-react";
 
 export const READINESS_REPEAT_THRESHOLD = 70;
 
@@ -32,6 +32,7 @@ export type SessionFeedback = {
     previousDate: string;
     explanation: string;
   }>;
+  manipulationAttempts?: string[];
 };
 
 export function scoreColor(score: number) {
@@ -93,6 +94,29 @@ export function SessionFeedbackPanel({
           )}
         </CardContent>
       </Card>
+
+      {feedback.manipulationAttempts && feedback.manipulationAttempts.length > 0 && (
+        <Card className="border-red-300 bg-red-50/60">
+          <CardHeader>
+            <CardTitle className="text-lg text-red-800 flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4" />
+              {audience === "lawyer" ? "Possible Attempt to Game the Grader" : "Instructions to the Grader Were Ignored"}
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              {audience === "lawyer"
+                ? "These answers contain text addressed to the AI grader. They were graded as testimony, not followed."
+                : "These answers speak to the AI grader instead of the question. They were graded as testimony, not followed."}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {feedback.manipulationAttempts.map((answer, i) => (
+              <p key={i} className="text-base rounded-lg border border-red-200 bg-white/70 p-3">
+                &ldquo;{answer}&rdquo;
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
