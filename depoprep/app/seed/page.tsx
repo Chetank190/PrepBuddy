@@ -292,6 +292,9 @@ export default function SeedPage() {
       <p className="text-xs text-center text-muted-foreground">
         After seeding, <a href="/register" className="text-primary underline">create an account</a> to get started.
       </p>
+      <p className="text-xs text-center text-muted-foreground">
+        Developers: <a href="/evals" className="text-primary underline">grader evals dashboard</a> (needs the eval admin key).
+      </p>
     </div>
   );
 }

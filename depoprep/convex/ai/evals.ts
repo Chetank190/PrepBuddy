@@ -5,6 +5,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { EVAL_CASES } from "../evalCases";
+import { isEvalAdmin } from "../evalAuth";
 import {
   buildEvaluatorPrompt,
   findGraderDirectedAnswers,
@@ -28,8 +29,10 @@ export const run = action({
     rag: v.boolean(),
     // Grade each case this many times (1–3) to measure how consistent the judge is.
     repeats: v.optional(v.number()),
+    adminKey: v.string(),
   },
   handler: async (ctx, args): Promise<Id<"eval_runs">> => {
+    if (!isEvalAdmin(args.adminKey)) throw new ConvexError("Invalid eval admin key.");
     const blocked = await ctx.runQuery(internal.evals.blockedReason, {});
     if (blocked) throw new ConvexError(blocked);
     const repeats = Math.min(Math.max(Math.round(args.repeats ?? 1), 1), 3);

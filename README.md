@@ -79,7 +79,7 @@ grade-session                 2.80 s  output: score 95, gradedBy openai/gpt-oss-
 
 With Gemini working, the same session graded in 3.2 s on `gemini-3.1-flash-lite` (548 → 300 tokens). Langfuse also works out the cost per call from the model name.
 
-**What the first traces showed:** the disciplined answer *"I don't recall the exact speed"* retrieved the *speculation* example *"Probably around 60, maybe 65"* at cosine 0.80, above the 0.72 floor. The embedding matched the **topic** (speed), not the **mistake**, so a clean answer got a "similar mistake" card. The similarity floor can't tell those apart; fixing it needs a different approach (for example, retrieving only for answers the grader flags). The results page showed the card but not why; the trace showed which answer pulled it in and at what score.
+**What the first traces showed:** the disciplined answer *"I don't recall the exact speed"* retrieved the *speculation* example *"Probably around 60, maybe 65"* at cosine 0.80, above the 0.72 floor. The embedding matched the **topic** (speed), not the **mistake**, so a clean answer got a "similar mistake" card. The similarity floor can't tell those apart. The results page showed the card but not why; the trace showed which answer pulled it in and at what score. **Fix (Oct 27):** after grading, the witness only sees cards for rubric dimensions the grader scored below 70 (`referencesForMistakesFound`), so a clean speed answer no longer gets a speculation card. The match is per dimension, not per answer: a witness who speculated elsewhere can still see a speed example. The fallback graders still get the unfiltered references in their prompt, because retrieval runs before the grade.
 
 How it's built (`depoprep/convex/ai/tracing.ts`, about 230 lines, no SDK):
 
@@ -112,7 +112,7 @@ Labels were written for this project, not by practising lawyers; treat the numbe
 
 **Claude:** both Sonnets were as accurate as anything we tested, but Sonnet 4.6 took 10–18 s per grade, longer than the 10 s live timeout, so as a fallback it would have timed out almost every time. Sonnet 5.5 with `effort: "low"` scored the same in 5–8.5 s, at about **$0.01 per grade** (≈1,850 input + 620 output tokens, read from the Langfuse traces). It is now the default (`CLAUDE_MODEL` overrides it).
 
-**What we learned:** retrieval helped the weaker model (Groq) but not the stronger one, so references go into the prompt only for fallbacks. The "bigger" Gemini Flash took **106–122 s** per grade on the free tier versus **~2.8 s** for Flash-Lite, with no accuracy gain on the planted mistakes. And the `gemini-flash-lite-latest` alias later moved to an overloaded model (503s, 20–30 s replies), so the default is now pinned to `gemini-3.1-flash-lite`, which scored 100% weak caught on the eval at 2.4 s median.
+**What we learned:** retrieval helped the weaker model (Groq) but not the stronger one, so references go into the prompt only for fallbacks. Full Gemini Flash was tried by hand and took 50–120 s per grade on the free tier. No eval run of it was saved, so we can't say how accurate it was, and the free tier was throttling that week, so the slowness may be the tier, not the model. We kept Flash-Lite (~3 s). A comparison the evals do support: **Claude Sonnet 5.5 at `effort: "low"` matched Sonnet 4.6's accuracy (100% in band, 100% weak caught) at 6.3 s median versus 13.4 s**, so less thinking time cost nothing here. And the `gemini-flash-lite-latest` alias later moved to an overloaded model (503s, 20–30 s replies), so the default is now pinned to `gemini-3.1-flash-lite`, which scored 100% weak caught on the eval at 2.4 s median.
 
 ## Tests and CI
 
@@ -131,6 +131,7 @@ npx convex dev                                   # terminal 1 — creates/links 
 npx convex env set GEMINI_API_KEY <key>          # free: https://aistudio.google.com → Get API key
 npx convex env set GROQ_API_KEY <key>            # optional free fallback: https://console.groq.com
 npx convex env set ANTHROPIC_API_KEY <key>       # optional paid fallback (~$0.01 per grade)
+npx convex env set EVAL_ADMIN_KEY <secret>       # unlocks /evals (any long random string)
 npm run dev                                      # terminal 2 — http://localhost:3000
 npm test                                         # unit tests (no keys needed)
 ```
@@ -168,7 +169,7 @@ Everything runs on free tiers with no custom domain: the app is served at `https
 
 - Hackathon auth: passwords are SHA-256 hashed in the browser and sessions live in localStorage. The hash is compared on the server and never returned to clients, but this is not production auth.
 - Write paths the browser doesn't need are internal Convex functions (saving feedback, grading errors, the unused v1 opponent), so a public deployment can't be used as an open LLM proxy.
-- `/seed` and `/evals` are public on a deployed site: anyone can reset the demo witness or start an eval. Evals are limited to one every 2 minutes to protect free-tier quota.
+- `/seed` is public on a deployed site: anyone can reset the demo witness. `/evals` is hidden from the lawyer portal and needs the `EVAL_ADMIN_KEY` (set it with `--prod` too); without the key, nobody can view or start eval runs. Runs are also limited to one every 2 minutes to protect free-tier quota.
 - Claude is a paid API (about $0.01 per grade); it is only called when Gemini fails, or in an eval run with Claude selected.
 - Free-tier providers may use prompts to improve their models — use demo transcripts only, never real client data.
 - With tracing on, full transcripts and prompts are stored in Langfuse. That's useful for debugging, but it's one more place client data would live.

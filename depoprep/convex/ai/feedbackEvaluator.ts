@@ -10,6 +10,7 @@ import {
   gradeWithChain,
   promptGetsReferences,
   ragMode,
+  referencesForMistakesFound,
   retrieveCoaching,
   type CoachingReference,
   type GradeResult,
@@ -90,7 +91,7 @@ export const generateFeedback = action({
       gradedBy: result.model,
       gradingMs: result.ms,
       fallbacks: result.fallbacks,
-      references,
+      references: referencesForMistakesFound(references, result.feedback.rubric),
       manipulationAttempts: manipulationAttempts.length > 0 ? manipulationAttempts : undefined,
       rawJson: result.rawText,
     });

@@ -5,12 +5,11 @@ import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
-import { Scale, LayoutDashboard, FolderOpen, LogOut, FlaskConical } from "lucide-react";
+import { Scale, LayoutDashboard, FolderOpen, LogOut } from "lucide-react";
 
 const navItems = [
   { href: "/lawyer", label: "Dashboard", icon: LayoutDashboard },
   { href: "/lawyer/matters", label: "Matters", icon: FolderOpen },
-  { href: "/evals", label: "Grader Evals", icon: FlaskConical },
 ];
 
 export default function LawyerLayout({ children }: { children: React.ReactNode }) {

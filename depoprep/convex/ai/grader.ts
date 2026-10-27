@@ -174,7 +174,8 @@ const FEEDBACK_SCHEMA = {
   required: ["readinessScore", "rubric", "tips", "riskHighlights"],
 };
 
-// Flash-Lite grades in ~3s on the free tier; full Flash took 50-120s in testing, too slow for a live demo.
+// Flash-Lite grades in ~3s on the free tier; full Flash took 50-120s in manual tries (free-tier throttling
+// likely played a part; never eval'd), too slow for a live demo either way.
 // Free-tier models also return 503/429 under load, so retry once before handing off to the next provider.
 const RETRYABLE_STATUSES = [429, 500, 503];
 // A provider slower than this is treated as failed, so the next one in the chain takes over.
@@ -632,6 +633,18 @@ export function promptGetsReferences(mode: RagMode, provider: ProviderName): boo
 // Measured: real matches (same mistake) scored 0.73–0.83; short clean answers like "No." or "To work."
 // scored 0.61–0.66 against generic examples — the "hubness" that put the same example in every result.
 export const COACHING_MIN_SCORE = 0.72;
+
+/**
+ * Embeddings match an answer's topic, not its mistake: the clean "I don't recall the exact speed" retrieved
+ * the speculation example "Probably around 60, maybe 65" at 0.80. So after grading, the witness only sees
+ * cards for dimensions the grader actually marked weak (below 70, the eval's threshold).
+ */
+export function referencesForMistakesFound(
+  references: CoachingReference[],
+  rubric: Feedback["rubric"],
+): CoachingReference[] {
+  return references.filter((r) => rubric[r.dimension].score < 70);
+}
 
 /**
  * Embeds each witness answer, keeps its best coaching example if it clears COACHING_MIN_SCORE, and

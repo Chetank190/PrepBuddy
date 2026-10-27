@@ -9,6 +9,7 @@ import {
   parseFeedback,
   promptGetsReferences,
   quoteAnswer,
+  referencesForMistakesFound,
   toJsonSchema,
 } from "../convex/ai/grader";
 import { trimToAnswer } from "../convex/ai/followUp";
@@ -143,6 +144,31 @@ describe("promptGetsReferences", () => {
     expect(promptGetsReferences("auto", "gemini")).toBe(false);
     expect(promptGetsReferences("auto", "claude")).toBe(true);
     expect(promptGetsReferences("off", "groq")).toBe(false);
+  });
+});
+
+describe("referencesForMistakesFound", () => {
+  const ref = (dimension: "speculation" | "volunteering") => ({
+    dimension,
+    question: "How fast were you going?",
+    badAnswer: "Probably around 60, maybe 65.",
+    betterAnswer: "I don't recall the exact speed.",
+    why: "Guessing.",
+  });
+  const rubric = (speculation: number, volunteering: number) => ({
+    ...validFeedback.rubric,
+    speculation: { score: speculation, explanation: "" },
+    volunteering: { score: volunteering, explanation: "" },
+  });
+
+  it("drops a card whose mistake the grader did not find (topic match, not mistake match)", () => {
+    // "I don't recall the exact speed" retrieved the speculation example at 0.80 although it doesn't speculate.
+    expect(referencesForMistakesFound([ref("speculation")], rubric(90, 90) as never)).toEqual([]);
+  });
+
+  it("keeps cards for dimensions scored below 70", () => {
+    const kept = referencesForMistakesFound([ref("speculation"), ref("volunteering")], rubric(40, 85) as never);
+    expect(kept.map((r) => r.dimension)).toEqual(["speculation"]);
   });
 });
 

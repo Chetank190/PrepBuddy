@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAction, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
@@ -9,7 +9,8 @@ import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, FlaskConical, Loader2, Play } from "lucide-react";
+import { PasswordInput } from "@/components/ui/password-input";
+import { ArrowLeft, FlaskConical, Loader2, Lock, Play } from "lucide-react";
 import { toast } from "sonner";
 
 type Provider = "gemini" | "groq" | "claude";
@@ -51,9 +52,20 @@ const METRICS = [
   { key: "median", label: "Median time", help: "Per case, including retrieval" },
 ] as const;
 
+// Remembered for the browser tab only, so a shared demo laptop doesn't keep it.
+const ADMIN_KEY_STORAGE = "depoprep_eval_admin_key";
+
 export default function EvalsPage() {
-  const runs = useQuery(api.evals.listRuns, {});
-  const cases = useQuery(api.evals.listCases, {});
+  const [adminKey, setAdminKey] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  useEffect(() => {
+    // Read after hydration; sessionStorage doesn't exist during server render.
+    try {
+      setAdminKey(sessionStorage.getItem(ADMIN_KEY_STORAGE)); // eslint-disable-line react-hooks/set-state-in-effect
+    } catch {}
+  }, []);
+  const runs = useQuery(api.evals.listRuns, adminKey ? { adminKey } : "skip");
+  const cases = useQuery(api.evals.listCases, adminKey ? { adminKey } : "skip");
   const runEval = useAction(api.ai.evals.run);
   const [provider, setProvider] = useState<Provider>("gemini");
   const [rag, setRag] = useState(false);
@@ -64,12 +76,47 @@ export default function EvalsPage() {
   const running = runs?.some((r) => r.status === "running") ?? false;
 
   const handleRun = async () => {
+    if (!adminKey) return;
     setStarting(true);
     // The action runs for ~30–90 s; progress arrives through the reactive listRuns query.
-    runEval({ provider, rag, repeats: repeat ? 3 : 1 })
+    runEval({ provider, rag, repeats: repeat ? 3 : 1, adminKey })
       .catch((err) => toast.error(err instanceof ConvexError ? String(err.data) : "Eval failed"))
       .finally(() => setStarting(false));
   };
+
+  const submitKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = keyInput.trim();
+    if (!key) return;
+    try {
+      sessionStorage.setItem(ADMIN_KEY_STORAGE, key);
+    } catch {}
+    setAdminKey(key);
+  };
+
+  // listRuns returns null when the server rejects the key.
+  if (!adminKey || runs === null) {
+    return (
+      <div className="min-h-screen bg-background p-8 flex items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Lock className="w-5 h-5 text-primary" />
+              Grader Evals
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={submitKey} className="space-y-3">
+              <p className="text-sm text-muted-foreground">Enter the eval admin key to open the dashboard.</p>
+              <PasswordInput value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder="Admin key" autoFocus />
+              {adminKey && runs === null && <p className="text-sm text-red-600">That key was not accepted.</p>}
+              <Button type="submit" className="w-full">Unlock</Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background p-8">

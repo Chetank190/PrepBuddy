@@ -2,22 +2,26 @@ import { internalMutation, internalQuery, query } from "./_generated/server";
 import { v } from "convex/values";
 import { evalCaseResult } from "./schema";
 import { EVAL_CASES } from "./evalCases";
+import { isEvalAdmin } from "./evalAuth";
 
+// Both return null for a wrong key so the page can ask for it instead of crashing.
 export const listRuns = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { adminKey: v.string() },
+  handler: async (ctx, args) => {
+    if (!isEvalAdmin(args.adminKey)) return null;
     return await ctx.db.query("eval_runs").withIndex("by_started").order("desc").take(20);
   },
 });
 
 export const listCases = query({
-  args: {},
-  handler: async () => {
+  args: { adminKey: v.string() },
+  handler: async (_ctx, args) => {
+    if (!isEvalAdmin(args.adminKey)) return null;
     return EVAL_CASES.map(({ id, title, band, weak, strong }) => ({ id, title, band, weak, strong }));
   },
 });
 
-// On a public deployment anyone can press "Run eval"; this keeps free-tier quota for the live demo.
+// Even with the admin key, keep runs spaced out so free-tier quota survives the live demo.
 const EVAL_COOLDOWN_MS = 2 * 60 * 1000;
 
 /** Returns why a new run can't start yet, or null. */
